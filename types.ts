@@ -12,4 +12,5 @@ export enum Mode {
 export interface ChatMessage {
   role: 'user' | 'model';
   text: string;
+  romaji?: string;
 }

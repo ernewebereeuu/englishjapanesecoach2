@@ -1,12 +1,13 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, Blob } from '@google/genai';
 import { Language } from '../types';
-import { MicrophoneIcon } from './icons';
+import { MicrophoneIcon, StopIcon, PauseIcon } from './icons';
 import { encode, decode, decodeAudioData } from '../utils/audio';
 
 interface ConversationViewProps {
   language: Language;
   apiKey: string | null;
+  systemInstruction: string;
 }
 
 interface TranscriptionEntry {
@@ -14,18 +15,14 @@ interface TranscriptionEntry {
   text: string;
 }
 
-// Define system prompts based on language
-const systemPrompts = {
-  [Language.ENGLISH]: "You are a friendly and patient English language tutor. Your name is Alex. Your goal is to help me practice conversational English. Keep your responses natural, engaging, and not too long. Correct my grammar mistakes gently if you spot any.",
-  [Language.JAPANESE]: "あなたは親切で忍耐強い日本語の先生です。名前は「アキ」です。私の日本語の会話練習を手伝うのがあなたの役割です。自然で魅力的な、長すぎない返事を心がけてください。もし文法の間違いを見つけたら、優しく訂正してください。",
-};
+type RecordingState = 'idle' | 'connecting' | 'recording' | 'paused';
 
-const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey }) => {
-  const [isListening, setIsListening] = useState(false);
-  const [status, setStatus] = useState('Mantén presionado el botón para hablar.');
+const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, systemInstruction }) => {
+  const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [transcriptionHistory, setTranscriptionHistory] = useState<TranscriptionEntry[]>([]);
   const [currentInput, setCurrentInput] = useState('');
   const [currentOutput, setCurrentOutput] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
   const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -41,9 +38,6 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey })
   const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
 
   const stopConversation = useCallback(() => {
-    setIsListening(false);
-    setStatus('Mantén presionado el botón para hablar.');
-    
     if (sessionPromiseRef.current) {
         sessionPromiseRef.current.then(session => session.close());
         sessionPromiseRef.current = null;
@@ -74,23 +68,38 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey })
     audioSourcesRef.current.forEach(source => source.stop());
     audioSourcesRef.current.clear();
     nextStartTimeRef.current = 0;
+    
+    setRecordingState('idle');
 
   }, []);
 
+  const pauseRecording = useCallback(() => {
+    if (scriptProcessorRef.current && mediaStreamSourceRef.current) {
+        mediaStreamSourceRef.current.disconnect(scriptProcessorRef.current);
+        setRecordingState('paused');
+    }
+  }, []);
+
+  const resumeRecording = useCallback(() => {
+    if (scriptProcessorRef.current && mediaStreamSourceRef.current) {
+        mediaStreamSourceRef.current.connect(scriptProcessorRef.current);
+        setRecordingState('recording');
+    }
+  }, []);
+
   const startConversation = useCallback(async () => {
-    if (isListening || !apiKey) {
-      if (!apiKey) setStatus('Error: API Key not available.');
+    if (recordingState !== 'idle' || !apiKey) {
+      if (!apiKey) setError('Error: API Key not available.');
       return;
     }
-
-    // For push-to-talk, clear current turn data, but not the whole history
+    
+    setTranscriptionHistory([]);
     setCurrentInput('');
     setCurrentOutput('');
     currentInputRef.current = '';
     currentOutputRef.current = '';
-
-    setStatus('Connecting...');
-    setIsListening(true);
+    setError(null);
+    setRecordingState('connecting');
     
     try {
       const ai = new GoogleGenAI({ apiKey });
@@ -102,11 +111,11 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey })
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
-          systemInstruction: systemPrompts[language],
+          systemInstruction: systemInstruction,
         },
         callbacks: {
           onopen: async () => {
-            setStatus('Listening...');
+            setRecordingState('recording');
             streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
             
             inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -140,7 +149,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey })
               const fullInput = currentInputRef.current;
               const fullOutput = currentOutputRef.current;
               setTranscriptionHistory(prev => [
-                ...prev, 
+                ...prev,
                 { speaker: 'user', text: fullInput },
                 { speaker: 'model', text: fullOutput },
               ]);
@@ -171,27 +180,63 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey })
           },
           onerror: (e: ErrorEvent) => {
             console.error('API Error:', e);
-            setStatus(`Error: ${e.message}`);
+            setError(`Error: ${e.message}`);
             stopConversation();
           },
           onclose: () => {
-             // Handled by user action
+             setRecordingState('idle');
           },
         },
       });
       sessionPromiseRef.current = sessionPromise;
-    } catch (error) {
-      console.error("Failed to start conversation:", error);
-      setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      setIsListening(false);
+    } catch (err) {
+      console.error("Failed to start conversation:", err);
+      setError(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setRecordingState('idle');
     }
-  }, [isListening, language, stopConversation, apiKey]);
+  }, [recordingState, systemInstruction, stopConversation, apiKey]);
 
   useEffect(() => {
     return () => {
       stopConversation();
     };
   }, [stopConversation]);
+
+  const handlePrimaryButtonClick = () => {
+    switch (recordingState) {
+      case 'idle':
+        startConversation();
+        break;
+      case 'recording':
+        pauseRecording();
+        break;
+      case 'paused':
+        resumeRecording();
+        break;
+    }
+  };
+
+  const getStatusText = () => {
+    switch (recordingState) {
+      case 'idle': return 'Presiona el botón para hablar.';
+      case 'connecting': return 'Conectando...';
+      case 'recording': return 'Grabando... Presiona para pausar.';
+      case 'paused': return 'Pausado. Presiona para reanudar.';
+      default: return '';
+    }
+  };
+
+  const getPrimaryButtonIcon = () => {
+    switch (recordingState) {
+        case 'idle':
+        case 'paused':
+            return <MicrophoneIcon className="w-10 h-10" />;
+        case 'recording':
+            return <PauseIcon className="w-10 h-10" />;
+        case 'connecting':
+            return <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>;
+    }
+  };
 
   return (
     <div className="flex flex-col h-full w-full max-w-4xl mx-auto bg-gray-800 rounded-2xl shadow-2xl p-6">
@@ -200,7 +245,15 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey })
           <div key={index} className={`flex ${entry.speaker === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-md p-3 rounded-lg ${entry.speaker === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-200'}`}>
               <p className="text-sm font-semibold mb-1">{entry.speaker === 'user' ? 'You' : 'Coach'}</p>
-              <p>{entry.text}</p>
+              {entry.speaker === 'user' ? (
+                <p>{entry.text}</p>
+              ) : (
+                language === Language.JAPANESE ? (
+                  <p dangerouslySetInnerHTML={{ __html: entry.text }}></p>
+                ) : (
+                  <p>{entry.text}</p>
+                )
+              )}
             </div>
           </div>
         ))}
@@ -216,28 +269,41 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey })
           <div className="flex justify-start">
             <div className="max-w-md p-3 rounded-lg bg-gray-700/50 text-gray-200 italic">
                 <p className="text-sm font-semibold mb-1">Coach (speaking...)</p>
-                <p>{currentOutput}</p>
+                {language === Language.JAPANESE ? (
+                  <p dangerouslySetInnerHTML={{ __html: currentOutput }}></p>
+                ) : (
+                  <p>{currentOutput}</p>
+                )}
             </div>
           </div>
         )}
       </div>
       <div className="flex-shrink-0 pt-6 text-center">
-        <p className="text-gray-400 mb-4 h-6">{status}</p>
-        <button
-          onMouseDown={startConversation}
-          onMouseUp={stopConversation}
-          onTouchStart={startConversation}
-          onTouchEnd={stopConversation}
-          disabled={!apiKey}
-          className={`relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300
-            ${isListening ? 'bg-red-600 scale-110' : 'bg-green-600 hover:bg-green-700'}
-            text-white shadow-lg focus:outline-none focus:ring-4 focus:ring-opacity-50
-            ${isListening ? 'focus:ring-red-500' : 'focus:ring-green-500'}
-            disabled:bg-gray-600 disabled:cursor-not-allowed`}
-        >
-          {isListening && <span className="absolute inset-0 rounded-full bg-red-500/50 animate-ping"></span>}
-          <MicrophoneIcon className="w-10 h-10" />
-        </button>
+        <p className="text-gray-400 mb-4 h-6">{error || getStatusText()}</p>
+        <div className="flex items-center justify-center gap-6 h-24">
+            { (recordingState === 'recording' || recordingState === 'paused') && (
+                <button
+                    onClick={stopConversation}
+                    className="w-20 h-20 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg transition-all focus:outline-none focus:ring-4 focus:ring-red-500 focus:ring-opacity-50"
+                    aria-label="Stop recording"
+                >
+                    <StopIcon className="w-8 h-8" />
+                </button>
+            )}
+            <button
+            onClick={handlePrimaryButtonClick}
+            disabled={!apiKey || recordingState === 'connecting'}
+            className={`relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300
+                ${recordingState === 'recording' ? 'bg-blue-600' : 'bg-green-600 hover:bg-green-700'}
+                ${recordingState === 'paused' ? 'scale-110' : ''}
+                text-white shadow-lg focus:outline-none focus:ring-4 focus:ring-opacity-50
+                ${recordingState === 'recording' ? 'focus:ring-blue-500' : 'focus:ring-green-500'}
+                disabled:bg-gray-600 disabled:cursor-not-allowed`}
+            >
+            {recordingState === 'recording' && <span className="absolute inset-0 rounded-full bg-blue-500/50 animate-ping"></span>}
+            {getPrimaryButtonIcon()}
+            </button>
+        </div>
       </div>
     </div>
   );

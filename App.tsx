@@ -1,64 +1,103 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { GoogleGenAI, Chat, Modality } from '@google/genai';
+import { GoogleGenAI, Chat, Modality, Type } from '@google/genai';
 import { Language, Mode, ChatMessage } from './types';
 import { VolumeUpIcon, SendIcon, BotIcon } from './components/icons';
 import { decode, decodeAudioData } from './utils/audio';
 import ConversationView from './components/ConversationView';
 
-const systemPrompts = {
-  [Language.ENGLISH]: "You are a friendly and patient English language tutor. Your name is Alex. Your goal is to help me practice conversational English. Keep your responses natural, engaging, and not too long. Correct my grammar mistakes gently if you spot any.",
-  [Language.JAPANESE]: "あなたは親切で忍耐強い日本語の先生です。名前は「アキ」です。私の日本語の会話練習を手伝うのがあなたの役割です。自然で魅力的な、長すぎない返事を心がけてください。もし文法の間違いを見つけたら、優しく訂正してください。",
+const getSystemPrompt = (language: Language, level: string = 'N5'): string => {
+  if (language === Language.JAPANESE) {
+    return `あなたは親切で忍耐強い日本語の先生です。名前は「アキ」です。私の日本語の会話練習を手伝うのがあなたの役割です。
+自然で魅力的な、長すぎない返事を心がけてください。
+あなたの語彙と文法を日本語能力試験（JLPT）の${level}レベルに合わせてください。
+もし文法の間違いを見つけたら、優しく訂正してください。
+重要：あなたの返答は必ず、次のキーを持つJSONオブジェクトでなければなりません：
+1. "japanese": HTMLのルビタグを使ってふりがなを付けた、あなたの日本語の返答。例：「<ruby>日本語<rt>にほんご</rt></ruby>」
+2. "romaji": あなたの返答の正確なローマ字表記。`;
+  }
+  return "You are a friendly and patient English language tutor. Your name is Alex. Your goal is to help me practice conversational English. Keep your responses natural, engaging, and not too long. Correct my grammar mistakes gently if you spot any.";
 };
+
+const getSpokenModeSystemPrompt = (language: Language, level: string = 'N5'): string => {
+  if (language === Language.JAPANESE) {
+    return `あなたは日本語の先生「アキ」です。私は今、音声会話で日本語を練習しています。
+あなたの役割は、自然な会話で応答することです。語彙と文法はJLPT ${level}レベルに合わせてください。
+文字起こしテキストにはHTMLのルビタグを含めないでください。`;
+  }
+  return "You are Alex, an English tutor. I am practicing speaking with you. Respond naturally. The system will transcribe your audio response. Correct my grammar mistakes gently.";
+};
+
+const getWelcomeMessage = (language: Language): ChatMessage => {
+    if (language === Language.ENGLISH) {
+        return { 
+            role: 'model', 
+            text: "Hello! I'm Alex. Ready to practice some English? Ask me anything to start!" 
+        };
+    }
+    return {
+        role: 'model',
+        text: "こんにちは！アキです。<ruby>日本語<rt>にほんご</rt></ruby>の<ruby>練習<rt>れんしゅう</rt></ruby>を<ruby>始<rt>はじ</rt></ruby>めましょうか？<ruby>何<rt>なん</rt></ruby>でも<ruby>聞<rt>き</rt></ruby>いてくださいね！",
+        romaji: "Konnichiwa! Aki desu. Nihongo no renshū o hajimemashō ka? Nandemo kiite kudasai ne!"
+    };
+}
 
 const App: React.FC = () => {
   const [language, setLanguage] = useState<Language>(Language.ENGLISH);
+  const [level, setLevel] = useState<string>('N5');
   const [mode, setMode] = useState<Mode>(Mode.WRITTEN);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [userInput, setUserInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [audioCache, setAudioCache] = useState<Record<string, AudioBuffer>>({});
+  const [loadingAudio, setLoadingAudio] = useState<string | null>(null);
 
   const chatRef = useRef<Chat | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   
   useEffect(() => {
-    const fetchApiKey = async () => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        const response = await fetch('/api/get-key');
-
-        if (response.status === 404) {
-          throw new Error('API endpoint not found (404). Make sure api/get-key.ts is in the /api folder and you have redeployed.');
-        }
-
-        if (!response.ok) {
-          let errorMsg = `Server responded with status: ${response.status}.`;
-          try {
-            const errorData = await response.json();
-            errorMsg = errorData.error || errorMsg;
-          } catch (jsonError) {
-            // Response wasn't JSON, do nothing extra.
-          }
-          throw new Error(errorMsg);
-        }
-
-        const data = await response.json();
-        if (!data.apiKey) {
-          throw new Error('API key is missing in the server response. Please check the api/get-key.ts function.');
-        }
-        setApiKey(data.apiKey);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'An unknown error occurred while fetching the API key.');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchApiKey();
+    if (process.env.API_KEY) {
+      setApiKey(process.env.API_KEY);
+    } else {
+      setError("Configuration Error: API_KEY is not available. Please ensure it is set up correctly in your AI Studio environment.");
+    }
   }, []);
+
+  const getAudioContext = useCallback(() => {
+    if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    }
+    return audioContextRef.current;
+  }, []);
+
+  const fetchAndCacheAudio = useCallback(async (text: string) => {
+    if (audioCache[text] || !apiKey) return;
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const strippedText = text.replace(/<rt>.*?<\/rt>/g, '').replace(/<\/?ruby>/g, '');
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: strippedText }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+        },
+      });
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+        const audioContext = getAudioContext();
+        const audioBuffer = await decodeAudioData(decode(base64Audio), audioContext, 24000, 1);
+        setAudioCache(prev => ({ ...prev, [text]: audioBuffer }));
+      }
+    } catch (e) {
+      console.error("Failed to pre-fetch audio:", e);
+      // Don't set user-facing error for a background task.
+    }
+  }, [apiKey, audioCache, getAudioContext]);
+
 
   const initializeChat = useCallback(() => {
     if (!apiKey) return;
@@ -66,25 +105,36 @@ const App: React.FC = () => {
     setIsLoading(true);
     try {
         const ai = new GoogleGenAI({ apiKey });
-        const systemInstruction = systemPrompts[language];
+        const systemInstruction = getSystemPrompt(language, level);
+        
+        const config: any = { systemInstruction };
+        if (language === Language.JAPANESE) {
+            config.responseMimeType = "application/json";
+            config.responseSchema = {
+                type: Type.OBJECT,
+                properties: {
+                    japanese: { type: Type.STRING, description: 'Japanese response with HTML ruby tags for furigana.' },
+                    romaji: { type: Type.STRING, description: 'Romaji transcription of the Japanese response.' },
+                },
+                required: ['japanese', 'romaji'],
+            };
+        }
+
         chatRef.current = ai.chats.create({
             model: 'gemini-2.5-flash',
-            config: { systemInstruction },
+            config,
         });
-        const welcomeMessage: ChatMessage = {
-            role: 'model',
-            text: language === Language.ENGLISH ? "Hello! I'm Alex. Ready to practice some English? Ask me anything to start!" : "こんにちは！アキです。日本語の練習を始めましょうか？何でも聞いてくださいね！",
-        };
+        const welcomeMessage = getWelcomeMessage(language);
         setMessages([welcomeMessage]);
+        fetchAndCacheAudio(welcomeMessage.text);
     } catch (e) {
         setError(e instanceof Error ? e.message : "An unknown error occurred during initialization.");
     } finally {
         setIsLoading(false);
     }
-  }, [language, apiKey]);
+  }, [language, level, apiKey, fetchAndCacheAudio]);
 
   useEffect(() => {
-    // Re-initialize chat when language changes or when API key is first loaded
     if (apiKey) {
       initializeChat();
     }
@@ -110,8 +160,22 @@ const App: React.FC = () => {
         throw new Error("Chat is not initialized.");
       }
       const response = await chatRef.current.sendMessage({ message: userInput });
-      const modelMessage: ChatMessage = { role: 'model', text: response.text };
+      
+      let modelMessage: ChatMessage;
+      if (language === Language.JAPANESE) {
+          try {
+              const parsed = JSON.parse(response.text);
+              modelMessage = { role: 'model', text: parsed.japanese, romaji: parsed.romaji };
+          } catch (jsonError) {
+              console.error("Failed to parse JSON response:", jsonError, "Raw text:", response.text);
+              modelMessage = { role: 'model', text: `Sorry, I had trouble formatting my response. Here is the raw text: ${response.text}` };
+          }
+      } else {
+          modelMessage = { role: 'model', text: response.text };
+      }
+
       setMessages(prev => [...prev, modelMessage]);
+      fetchAndCacheAudio(modelMessage.text);
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : "Failed to get a response.";
       setError(errorMessage);
@@ -122,14 +186,27 @@ const App: React.FC = () => {
   };
 
   const playAudio = async (text: string) => {
-    if (isLoading || !apiKey) return;
-    setIsLoading(true);
+    if (loadingAudio === text || !apiKey) return;
+
+    // Play from cache if available
+    if (audioCache[text]) {
+      const audioContext = getAudioContext();
+      const source = audioContext.createBufferSource();
+      source.buffer = audioCache[text];
+      source.connect(audioContext.destination);
+      source.start();
+      return;
+    }
+    
+    // Not in cache, so fetch, cache, and play
+    setLoadingAudio(text);
     setError(null);
     try {
       const ai = new GoogleGenAI({ apiKey });
+      const strippedText = text.replace(/<rt>.*?<\/rt>/g, '').replace(/<\/?ruby>/g, '');
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text }] }],
+        contents: [{ parts: [{ text: strippedText }] }],
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
@@ -138,11 +215,10 @@ const App: React.FC = () => {
 
       const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
       if (base64Audio) {
-        if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-        }
-        const audioContext = audioContextRef.current;
+        const audioContext = getAudioContext();
         const audioBuffer = await decodeAudioData(decode(base64Audio), audioContext, 24000, 1);
+        setAudioCache(prev => ({ ...prev, [text]: audioBuffer }));
+        
         const source = audioContext.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(audioContext.destination);
@@ -151,7 +227,7 @@ const App: React.FC = () => {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to play audio.");
     } finally {
-      setIsLoading(false);
+      setLoadingAudio(null);
     }
   };
 
@@ -162,17 +238,54 @@ const App: React.FC = () => {
         {messages.map((msg, index) => (
           <div key={index} className={`flex items-start gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
             {msg.role === 'model' && (
-              <div className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center flex-shrink-0">
-                <BotIcon className="w-5 h-5 text-white" />
-              </div>
+              <button
+                onClick={() => playAudio(msg.text)}
+                disabled={loadingAudio === msg.text || !apiKey}
+                className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center flex-shrink-0 transition-transform duration-200 ease-in-out hover:scale-110 disabled:scale-100 disabled:cursor-pointer disabled:bg-gray-600"
+                aria-label="Play audio for this message"
+              >
+                {loadingAudio === msg.text ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <BotIcon className="w-5 h-5 text-white" />
+                )}
+              </button>
             )}
             <div className={`max-w-md p-4 rounded-2xl ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-gray-700 text-gray-200 rounded-bl-none'}`}>
-              <p>{msg.text}</p>
-              {msg.role === 'model' && (
-                <button onClick={() => playAudio(msg.text)} className="mt-2 text-teal-400 hover:text-teal-300">
-                  <VolumeUpIcon className="w-5 h-5"/>
-                </button>
+              {msg.role === 'user' ? (
+                <p>{msg.text}</p>
+              ) : (
+                <>
+                  {language === Language.JAPANESE ? (
+                    <p dangerouslySetInnerHTML={{ __html: msg.text }}></p>
+                  ) : (
+                    <p>{msg.text}</p>
+                  )}
+                  {msg.romaji && (
+                    <p className="pt-2 mt-2 border-t border-gray-600 text-sm text-gray-400 font-mono tracking-wide">
+                      {msg.romaji}
+                    </p>
+                  )}
+                </>
               )}
+               {msg.role === 'user' && (
+                 <div className="w-full flex justify-end">
+                    <button
+                      onClick={() => playAudio(msg.text)}
+                      disabled={loadingAudio === msg.text || !apiKey}
+                      className={`mt-2 text-blue-200 hover:text-white disabled:text-gray-400`}
+                      aria-label="Play audio for this message"
+                    >
+                    {loadingAudio === msg.text ? (
+                        <div className="w-5 h-5 flex items-center justify-center">
+                          <div className="w-4 h-4 border-2 border-blue-200 border-t-transparent rounded-full animate-spin"></div>
+                        </div>
+                    ) : (
+                        <VolumeUpIcon className="w-5 h-5"/>
+                    )}
+                    </button>
+                 </div>
+               )}
             </div>
           </div>
         ))}
@@ -214,7 +327,7 @@ const App: React.FC = () => {
   );
   
   const renderAppContent = () => {
-    if (!apiKey && isLoading) {
+    if (!apiKey && !error) {
       return (
         <div className="text-center text-gray-400">
           <p>Loading configuration...</p>
@@ -222,17 +335,16 @@ const App: React.FC = () => {
       );
     }
 
-    if (error && !apiKey) {
+    if (error && !messages.length) {
       return (
          <div className="w-full max-w-4xl mx-auto p-6 bg-red-900/20 border border-red-500 rounded-xl text-center">
-           <h3 className="text-xl font-semibold text-red-300">Configuration Error</h3>
+           <h3 className="text-xl font-semibold text-red-300">Error</h3>
            <p className="text-red-400 mt-2">{error}</p>
-           <p className="text-gray-400 mt-4 text-sm">Please double-check your Vercel project settings and redeploy.</p>
          </div>
       );
     }
     
-    return mode === Mode.WRITTEN ? renderWrittenMode() : <ConversationView language={language} apiKey={apiKey} />;
+    return mode === Mode.WRITTEN ? renderWrittenMode() : <ConversationView language={language} apiKey={apiKey} systemInstruction={getSpokenModeSystemPrompt(language, level)} />;
   }
 
 
@@ -254,6 +366,21 @@ const App: React.FC = () => {
               </button>
             ))}
         </div>
+
+        {language === Language.JAPANESE && (
+          <>
+            <div className="w-px h-6 bg-gray-600 hidden sm:block"></div>
+            <div className="flex gap-1 sm:gap-2">
+                {['N5', 'N4', 'N3', 'N2', 'N1'].map(lvl => (
+                  <button key={lvl} onClick={() => setLevel(lvl)} 
+                    className={`px-3 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-colors ${level === lvl ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>
+                    {lvl}
+                  </button>
+                ))}
+            </div>
+          </>
+        )}
+
         <div className="w-px h-6 bg-gray-600 hidden sm:block"></div>
         <div className="flex gap-2">
             {[Mode.WRITTEN, Mode.SPOKEN].map(m => (
