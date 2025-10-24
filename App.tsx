@@ -192,12 +192,20 @@ const App: React.FC = () => {
   const audioCacheRef = useRef<Record<string, AudioBuffer>>({});
 
   useEffect(() => {
-    const fetchKey = async () => {
+    const initializeApiKey = async () => {
+      // First, try to use the key if it's directly injected (for AI Studio)
+      if (process.env.API_KEY) {
+        setApiKey(process.env.API_KEY);
+        aiClient.current = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        return;
+      }
+
+      // If not found, fall back to fetching from the API route (for Vercel)
       try {
         const response = await fetch('/api/get-key');
         if (!response.ok) {
           const errData = await response.json().catch(() => ({ error: 'Failed to fetch API key from server.' }));
-          throw new Error(errData.error || 'Check Vercel environment variables.');
+          throw new Error(errData.error || 'Check server environment variables.');
         }
         const data = await response.json();
         if (data.apiKey) {
@@ -208,10 +216,11 @@ const App: React.FC = () => {
         }
       } catch (err) {
         console.error(err);
-        setApiKeyError(err instanceof Error ? err.message : String(err));
+        setApiKeyError(err instanceof Error ? err.message : "Could not initialize API key. Ensure it's set in your environment variables.");
       }
     };
-    fetchKey();
+    
+    initializeApiKey();
   }, []);
 
   const getAudioContext = useCallback(() => {
