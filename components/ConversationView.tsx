@@ -4,6 +4,7 @@ import { GoogleGenAI, LiveServerMessage, Modality, Blob, Part } from '@google/ge
 import { Language, ChatMessage, BreakdownEntry } from '../types';
 import { MicrophoneIcon, StopIcon, PauseIcon } from './icons';
 import { encode, decode, decodeAudioData } from '../utils/audio';
+import { getFriendlyErrorMessage } from '../utils/error';
 import WordBreakdownModal from './WordBreakdownModal';
 
 
@@ -250,7 +251,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
           },
           onerror: (e: ErrorEvent) => {
             console.error('API Error:', e);
-            setError(`Error: ${e.message}`);
+            setError(getFriendlyErrorMessage(e));
             stopConversation();
           },
           onclose: () => {
@@ -261,8 +262,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
       sessionPromiseRef.current = sessionPromise;
     } catch (err) {
       console.error("Failed to start conversation:", err);
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      setError(`Error: ${errorMessage}`);
+      setError(getFriendlyErrorMessage(err));
       setRecordingState('idle');
     }
   }, [recordingState, systemInstruction, stopConversation, language, pauseRecording, resumeRecording, apiKey, onClearHistory, onAppendMessages]);

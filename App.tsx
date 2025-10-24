@@ -3,6 +3,7 @@ import { GoogleGenAI, Modality, Type, Content, Part } from '@google/genai';
 import { Language, Mode, ChatMessage } from './types';
 import { VolumeUpIcon, SendIcon, BotIcon } from './components/icons';
 import { decode, decodeAudioData } from './utils/audio';
+import { getFriendlyErrorMessage } from './utils/error';
 import ConversationView from './components/ConversationView';
 import WordBreakdownModal from './components/WordBreakdownModal';
 
@@ -250,7 +251,7 @@ const App: React.FC = () => {
         audioCacheRef.current[text] = audioBuffer;
       }
     } catch (e) {
-      console.error("Failed to pre-fetch audio:", e);
+      console.error("Failed to pre-fetch audio:", getFriendlyErrorMessage(e));
     }
   }, [getAudioContext, language]);
 
@@ -342,9 +343,9 @@ const App: React.FC = () => {
         if(modelMessage.speech) fetchAndCacheAudio(modelMessage.speech);
 
     } catch (e) {
-      const errorMessage = e instanceof Error ? e.message : "Failed to get a response.";
-      setError(errorMessage);
-       setMessages(prev => [...prev, {role: 'model', text: `Sorry, an error occurred: ${errorMessage}`}]);
+      const friendlyError = getFriendlyErrorMessage(e);
+      setError(friendlyError);
+       setMessages(prev => [...prev, {role: 'model', text: `Lo siento, ocurrió un error: ${friendlyError}`}]);
     } finally {
       setIsLoading(false);
     }
@@ -387,8 +388,8 @@ const App: React.FC = () => {
         source.start();
       }
     } catch (e) {
-        const errorMessage = e instanceof Error ? e.message : "Failed to play audio.";
-        setError(errorMessage);
+        const friendlyError = getFriendlyErrorMessage(e);
+        setError(friendlyError);
     } finally {
       setLoadingAudio(null);
     }
