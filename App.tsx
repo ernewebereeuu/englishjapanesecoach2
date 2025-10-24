@@ -179,6 +179,7 @@ const App: React.FC = () => {
   const [level, setLevel] = useState<string>('N5');
   const [mode, setMode] = useState<Mode>(Mode.WRITTEN);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [spokenMessages, setSpokenMessages] = useState<ChatMessage[]>([]);
   const [userInput, setUserInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -271,7 +272,21 @@ const App: React.FC = () => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, spokenMessages]);
+
+  useEffect(() => {
+    // Reset conversation history when user switches mode or language
+    setSpokenMessages([]);
+  }, [language, mode]);
+
+
+  const appendSpokenMessages = useCallback((newMessages: ChatMessage[]) => {
+    setSpokenMessages(prev => [...prev, ...newMessages]);
+  }, []);
+
+  const clearSpokenMessages = useCallback(() => {
+    setSpokenMessages([]);
+  }, []);
 
   const handleSendMessage = async () => {
     if (!userInput.trim() || isLoading || !aiClient.current) return;
@@ -548,7 +563,7 @@ const App: React.FC = () => {
             </div>
           </div>
           <main className="w-full flex-grow flex items-center justify-center">
-              {mode === Mode.WRITTEN ? renderWrittenMode() : <ConversationView language={language} systemInstruction={getSpokenModeSystemPrompt(language, level)} apiKey={apiKey} />}
+              {mode === Mode.WRITTEN ? renderWrittenMode() : <ConversationView language={language} systemInstruction={getSpokenModeSystemPrompt(language, level)} apiKey={apiKey} history={spokenMessages} onAppendMessages={appendSpokenMessages} onClearHistory={clearSpokenMessages} />}
           </main>
       </>
     );

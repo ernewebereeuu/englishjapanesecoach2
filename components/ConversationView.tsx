@@ -13,16 +13,19 @@ interface ConversationViewProps {
   language: Language;
   systemInstruction: string;
   apiKey: string;
+  history: ChatMessage[];
+  onAppendMessages: (messages: ChatMessage[]) => void;
+  onClearHistory: () => void;
 }
 
-const ConversationView: React.FC<ConversationViewProps> = ({ language, systemInstruction, apiKey }) => {
+const ConversationView: React.FC<ConversationViewProps> = ({ language, systemInstruction, apiKey, history, onAppendMessages, onClearHistory }) => {
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
-  const [transcriptionHistory, setTranscriptionHistory] = useState<ChatMessage[]>([]);
   const [currentInput, setCurrentInput] = useState('');
   const [currentOutput, setCurrentOutput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
+  const [isModelSpeaking, setIsModelSpeaking] = useState(false);
 
   // FIX: The `LiveSession` type is not exported from the library. Using `any` as a fallback for the session promise.
   const sessionPromiseRef = useRef<Promise<any> | null>(null);
@@ -84,21 +87,16 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
     nextStartTimeRef.current = 0;
     
     setRecordingState('idle');
+    setIsModelSpeaking(false);
 
   }, []);
 
   const pauseRecording = useCallback(() => {
-    if (scriptProcessorRef.current && mediaStreamSourceRef.current) {
-        mediaStreamSourceRef.current.disconnect(scriptProcessorRef.current);
-        setRecordingState('paused');
-    }
+    setRecordingState('paused');
   }, []);
 
   const resumeRecording = useCallback(() => {
-    if (scriptProcessorRef.current && mediaStreamSourceRef.current) {
-        mediaStreamSourceRef.current.connect(scriptProcessorRef.current);
-        setRecordingState('recording');
-    }
+    setRecordingState('recording');
   }, []);
 
   const startConversation = useCallback(async () => {
@@ -107,7 +105,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
       return;
     }
     
-    setTranscriptionHistory([]);
+    onClearHistory();
     setCurrentInput('');
     setCurrentOutput('');
     currentInputRef.current = '';
@@ -115,6 +113,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
     currentLiveOutputRef.current = '';
     setError(null);
     setRecordingState('connecting');
+    setIsModelSpeaking(false);
     
     try {
       const ai = new GoogleGenAI({ apiKey });
@@ -140,6 +139,9 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
             scriptProcessorRef.current = inputAudioContextRef.current.createScriptProcessor(4096, 1, 1);
             
             scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
+              if (recordingStateRef.current !== 'recording') {
+                return;
+              }
               const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
               const pcmBlob: Blob = {
                 data: encode(new Uint8Array(new Int16Array(inputData.map(x => x * 32768)).buffer)),
@@ -205,7 +207,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
               }
               
               if (newEntries.length > 0) {
-                setTranscriptionHistory(prev => [...prev, ...newEntries]);
+                onAppendMessages(newEntries);
               }
 
               currentInputRef.current = '';
@@ -217,6 +219,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
 
             const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (audioData && outputAudioContextRef.current) {
+              setIsModelSpeaking(true);
               if (recordingStateRef.current === 'recording') {
                 pauseRecording();
               }
@@ -225,7 +228,15 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
               const source = outputAudioContextRef.current.createBufferSource();
               source.buffer = audioBuffer;
               source.connect(outputAudioContextRef.current.destination);
-              source.onended = () => audioSourcesRef.current.delete(source);
+              source.onended = () => {
+                  audioSourcesRef.current.delete(source);
+                  if (audioSourcesRef.current.size === 0) {
+                      setIsModelSpeaking(false);
+                      if (recordingStateRef.current === 'paused') {
+                          resumeRecording();
+                      }
+                  }
+              };
               source.start(nextStartTimeRef.current);
               nextStartTimeRef.current += audioBuffer.duration;
               audioSourcesRef.current.add(source);
@@ -254,7 +265,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
       setError(`Error: ${errorMessage}`);
       setRecordingState('idle');
     }
-  }, [recordingState, systemInstruction, stopConversation, language, pauseRecording, apiKey]);
+  }, [recordingState, systemInstruction, stopConversation, language, pauseRecording, resumeRecording, apiKey, onClearHistory, onAppendMessages]);
 
   useEffect(() => {
     return () => {
@@ -277,6 +288,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
   };
 
   const getStatusText = () => {
+    if (isModelSpeaking) return 'El coach está hablando...';
     switch (recordingState) {
       case 'idle': return 'Presiona el botón para hablar.';
       case 'connecting': return 'Conectando...';
@@ -315,7 +327,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
     <WordBreakdownModal isOpen={isModalOpen} message={selectedMessage} onClose={() => setIsModalOpen(false)} />
     <div className="flex flex-col h-full w-full max-w-4xl mx-auto bg-gray-800 rounded-2xl shadow-2xl p-6">
       <div className="flex-grow overflow-y-auto pr-4 space-y-4">
-        {transcriptionHistory.map((entry, index) => (
+        {history.map((entry, index) => (
           <div key={index} className={`flex ${entry.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div 
                onClick={() => entry.role === 'model' && handleOpenModal(entry)}
@@ -354,7 +366,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
             )}
             <button
             onClick={handlePrimaryButtonClick}
-            disabled={recordingState === 'connecting'}
+            disabled={recordingState === 'connecting' || isModelSpeaking}
             className={`relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300
                 ${recordingState === 'recording' ? 'bg-blue-600' : 'bg-green-600 hover:bg-green-700'}
                 ${recordingState === 'paused' ? 'scale-110' : ''}
