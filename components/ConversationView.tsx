@@ -11,9 +11,10 @@ type RecordingState = 'idle' | 'connecting' | 'recording' | 'paused';
 interface ConversationViewProps {
   language: Language;
   systemInstruction: string;
+  onApiKeyError: () => void;
 }
 
-const ConversationView: React.FC<ConversationViewProps> = ({ language, systemInstruction }) => {
+const ConversationView: React.FC<ConversationViewProps> = ({ language, systemInstruction, onApiKeyError }) => {
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [transcriptionHistory, setTranscriptionHistory] = useState<ChatMessage[]>([]);
   const [currentInput, setCurrentInput] = useState('');
@@ -235,6 +236,9 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
           },
           onerror: (e: ErrorEvent) => {
             console.error('API Error:', e);
+            if (e.message.includes('Requested entity was not found')) {
+                onApiKeyError();
+            }
             setError(`Error: ${e.message}`);
             stopConversation();
           },
@@ -246,10 +250,14 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
       sessionPromiseRef.current = sessionPromise;
     } catch (err) {
       console.error("Failed to start conversation:", err);
-      setError(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      if (errorMessage.includes('Requested entity was not found') || errorMessage.includes('API Key must be set')) {
+          onApiKeyError();
+      }
+      setError(`Error: ${errorMessage}`);
       setRecordingState('idle');
     }
-  }, [recordingState, systemInstruction, stopConversation, language, pauseRecording]);
+  }, [recordingState, systemInstruction, stopConversation, language, pauseRecording, onApiKeyError]);
 
   useEffect(() => {
     return () => {
