@@ -1,8 +1,12 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, Blob, Part } from '@google/genai';
-import { Language } from '../types';
+import { Language, ChatMessage, BreakdownEntry } from '../types';
 import { MicrophoneIcon, StopIcon, PauseIcon } from './icons';
 import { encode, decode, decodeAudioData } from '../utils/audio';
+import WordBreakdownModal from './WordBreakdownModal';
+
+
+type RecordingState = 'idle' | 'connecting' | 'recording' | 'paused';
 
 interface ConversationViewProps {
   language: Language;
@@ -10,20 +14,14 @@ interface ConversationViewProps {
   systemInstruction: string;
 }
 
-interface TranscriptionEntry {
-  speaker: 'user' | 'model';
-  text: string;
-  romaji?: string;
-}
-
-type RecordingState = 'idle' | 'connecting' | 'recording' | 'paused';
-
 const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, systemInstruction }) => {
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
-  const [transcriptionHistory, setTranscriptionHistory] = useState<TranscriptionEntry[]>([]);
+  const [transcriptionHistory, setTranscriptionHistory] = useState<ChatMessage[]>([]);
   const [currentInput, setCurrentInput] = useState('');
   const [currentOutput, setCurrentOutput] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
 
   const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -33,10 +31,23 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, s
   const mediaStreamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   
   const currentInputRef = useRef('');
-  const currentOutputRef = useRef('');
+  const currentOutputRef = useRef(''); // For the full formatted text response
+  const currentLiveOutputRef = useRef(''); // For the live audio transcript
 
   const nextStartTimeRef = useRef(0);
   const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+  
+  const recordingStateRef = useRef(recordingState);
+  useEffect(() => {
+    recordingStateRef.current = recordingState;
+  }, [recordingState]);
+
+  const handleOpenModal = (message: ChatMessage) => {
+    if (message.breakdown && message.breakdown.length > 0) {
+      setSelectedMessage(message);
+      setIsModalOpen(true);
+    }
+  };
 
   const stopConversation = useCallback(() => {
     if (sessionPromiseRef.current) {
@@ -99,6 +110,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, s
     setCurrentOutput('');
     currentInputRef.current = '';
     currentOutputRef.current = '';
+    currentLiveOutputRef.current = '';
     setError(null);
     setRecordingState('connecting');
     
@@ -144,53 +156,68 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, s
             }
 
             if (message.serverContent?.outputTranscription) {
-              currentOutputRef.current += message.serverContent.outputTranscription.text;
-              setCurrentOutput(currentOutputRef.current);
-            } else {
-              const modelTurnParts = message.serverContent?.modelTurn?.parts;
-              if (modelTurnParts) {
-                let fullTextResponse = '';
+              currentLiveOutputRef.current += message.serverContent.outputTranscription.text;
+              setCurrentOutput(currentLiveOutputRef.current);
+            }
+            
+            const modelTurnParts = message.serverContent?.modelTurn?.parts;
+            if (modelTurnParts) {
                 for (const part of modelTurnParts) {
-                  const p = part as Part;
-                  if (p.text) {
-                    fullTextResponse += p.text;
-                  }
+                    if ((part as Part).text) {
+                        currentOutputRef.current += (part as Part).text;
+                    }
                 }
-                if (fullTextResponse) {
-                  currentOutputRef.current = fullTextResponse;
-                  setCurrentOutput(fullTextResponse);
-                }
-              }
             }
             
             if (message.serverContent?.turnComplete) {
-              const fullInput = currentInputRef.current;
-              const fullOutput = currentOutputRef.current;
+              const fullInput = currentInputRef.current.trim();
+              const formattedText = currentOutputRef.current.trim();
+              const liveTranscript = currentLiveOutputRef.current.trim();
 
-              const modelEntry: TranscriptionEntry = { speaker: 'model', text: '' };
-              const romajiSeparator = '\nRomaji: ';
-
-              if (language === Language.JAPANESE && fullOutput.includes(romajiSeparator)) {
-                  const parts = fullOutput.split(romajiSeparator);
-                  modelEntry.text = parts[0];
-                  modelEntry.romaji = parts[1];
-              } else {
-                  modelEntry.text = fullOutput;
+              const newEntries: ChatMessage[] = [];
+              if (fullInput) {
+                newEntries.push({ role: 'user', text: fullInput });
               }
 
-              setTranscriptionHistory(prev => [
-                ...prev,
-                { speaker: 'user', text: fullInput },
-                modelEntry,
-              ]);
+              if (liveTranscript) {
+                 const modelMessage: ChatMessage = { role: 'model', text: liveTranscript };
+
+                 // Enhance with formatted data if available (for Japanese)
+                 if (formattedText && language === Language.JAPANESE) {
+                    const parts = formattedText.split('---');
+                    modelMessage.text = parts[0]?.trim() || liveTranscript;
+
+                    const romajiMatch = formattedText.match(/Romaji:\s*(.*)/m);
+                    if (romajiMatch) modelMessage.romaji = romajiMatch[1].trim();
+
+                    const breakdownMatch = formattedText.match(/Breakdown:\s*([\s\S]*)/m);
+                    if (breakdownMatch && breakdownMatch[1]) {
+                        const breakdownLines = breakdownMatch[1].trim().split('\n');
+                        modelMessage.breakdown = breakdownLines.map(line => {
+                            const [word, romaji, spanish] = line.split('|').map(s => s.trim());
+                            return { word, romaji, spanish };
+                        }).filter(b => b.word && b.romaji && b.spanish);
+                    }
+                 }
+                 newEntries.push(modelMessage);
+              }
+              
+              if (newEntries.length > 0) {
+                setTranscriptionHistory(prev => [...prev, ...newEntries]);
+              }
+
               currentInputRef.current = '';
               currentOutputRef.current = '';
+              currentLiveOutputRef.current = '';
               setCurrentInput('');
               setCurrentOutput('');
             }
 
             const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (audioData && outputAudioContextRef.current) {
+              if (recordingStateRef.current === 'recording') {
+                pauseRecording();
+              }
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputAudioContextRef.current.currentTime);
               const audioBuffer = await decodeAudioData(decode(audioData), outputAudioContextRef.current, 24000, 1);
               const source = outputAudioContextRef.current.createBufferSource();
@@ -224,7 +251,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, s
       setError(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
       setRecordingState('idle');
     }
-  }, [recordingState, systemInstruction, stopConversation, apiKey, language]);
+  }, [recordingState, systemInstruction, stopConversation, apiKey, language, pauseRecording]);
 
   useEffect(() => {
     return () => {
@@ -270,46 +297,33 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, s
 
   const renderCurrentOutput = () => {
     if (!currentOutput) return null;
-
-    const romajiSeparator = '\nRomaji: ';
-    const parts = currentOutput.split(romajiSeparator);
-    const japaneseText = parts[0];
-    const romajiText = parts.length > 1 ? parts[1] : null;
-
     return (
         <div className="flex justify-start">
             <div className="max-w-md p-3 rounded-lg bg-gray-700/50 text-gray-200 italic">
                 <p className="text-sm font-semibold mb-1">Coach (speaking...)</p>
-                <p>{japaneseText}</p>
-                {romajiText && (
-                    <p className="pt-2 mt-2 border-t border-gray-600/50 text-sm text-gray-400 font-mono tracking-wide">
-                        {romajiText}
-                    </p>
-                )}
+                <p>{currentOutput}</p>
             </div>
         </div>
     );
   };
 
   return (
+    <>
+    <WordBreakdownModal isOpen={isModalOpen} message={selectedMessage} onClose={() => setIsModalOpen(false)} />
     <div className="flex flex-col h-full w-full max-w-4xl mx-auto bg-gray-800 rounded-2xl shadow-2xl p-6">
       <div className="flex-grow overflow-y-auto pr-4 space-y-4">
         {transcriptionHistory.map((entry, index) => (
-          <div key={index} className={`flex ${entry.speaker === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-md p-3 rounded-lg ${entry.speaker === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-200'}`}>
-              <p className="text-sm font-semibold mb-1">{entry.speaker === 'user' ? 'You' : 'Coach'}</p>
-                {entry.speaker === 'user' ? (
-                  <p>{entry.text}</p>
-                ) : (
-                  <>
-                    <p>{entry.text}</p>
-                    {entry.romaji && (
-                        <p className="pt-2 mt-2 border-t border-gray-600 text-sm text-gray-400 font-mono tracking-wide">
-                            {entry.romaji}
-                        </p>
-                    )}
-                  </>
-                )}
+          <div key={index} className={`flex ${entry.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div 
+               onClick={() => entry.role === 'model' && handleOpenModal(entry)}
+              className={`max-w-md p-3 rounded-lg ${entry.role === 'user' ? 'bg-blue-600 text-white' : `bg-gray-700 text-gray-200 ${entry.breakdown ? 'cursor-pointer hover:bg-gray-600' : ''}`}`}>
+              <p className="text-sm font-semibold mb-1">{entry.role === 'user' ? 'You' : 'Coach'}</p>
+              <p>{entry.text}</p>
+              {entry.role === 'model' && entry.romaji && (
+                <p className="pt-2 mt-2 border-t border-gray-600 text-sm text-gray-400 font-mono tracking-wide">
+                  {entry.romaji}
+                </p>
+              )}
             </div>
           </div>
         ))}
@@ -351,6 +365,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, s
         </div>
       </div>
     </div>
+    </>
   );
 };
 

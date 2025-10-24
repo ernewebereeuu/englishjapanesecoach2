@@ -1,17 +1,20 @@
+
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { GoogleGenAI, Chat, Modality } from '@google/genai';
+import { GoogleGenAI, Modality, Type, Content, Part } from '@google/genai';
 import { Language, Mode, ChatMessage } from './types';
 import { VolumeUpIcon, SendIcon, BotIcon } from './components/icons';
 import { decode, decodeAudioData } from './utils/audio';
 import ConversationView from './components/ConversationView';
+import WordBreakdownModal from './components/WordBreakdownModal';
 
 const getLevelDescription = (level: string) => {
     switch (level) {
-        case 'N5': return 'Nivel Principiante (N5): Usa vocabulario y gramática muy básicos. Estructuras de frases simples. Enfócate en conversaciones cotidianas como saludos y presentaciones. No uses kanji.';
-        case 'N4': return 'Nivel Básico (N4): Usa vocabulario y gramática básicos. Habla de actividades diarias, compras, etc. Puedes empezar a usar kanji muy simples y comunes, pero siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
-        case 'N3': return 'Nivel Intermedio (N3): Usa un rango más amplio de vocabulario y gramática para situaciones más complejas. Usa kanji de uso común, siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
-        case 'N2': return 'Nivel Intermedio-Avanzado (N2): Usa gramática y vocabulario más complejos, adecuados para conversaciones sobre noticias o temas de trabajo. Usa kanji de forma más extensa, siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
-        case 'N1': return 'Nivel Avanzado (N1): Demuestra un dominio casi nativo. Usa expresiones idiomáticas, vocabulario especializado y estructuras gramaticales complexas. Usa kanji avanzados, siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
+        case 'N5': return 'Beginner (N5): Use basic vocabulary and grammar, focusing on daily conversations like greetings and self-introductions. Do not use kanji.';
+        case 'N4': return 'Elementary (N4): Use basic vocabulary and grammar for topics like daily activities and shopping. You can start using very common and simple kanji, but always provide furigana (in <ruby>漢字<rt>かんじ</rt></ruby> format).';
+        case 'N3': return 'Intermediate (N3): Use a wider range of vocabulary and grammar to handle more complex situations. Use common kanji, but always provide furigana.';
+        case 'N2': return 'Upper-Intermediate (N2): Use more complex grammar and vocabulary suitable for conversations on topics like news and work. Use a wide range of kanji, but always provide furigana.';
+        case 'N1': return 'Advanced (N1): Demonstrate near-native ability. Use idiomatic expressions, technical terms, and complex grammatical structures. Use advanced kanji, but always provide furigana.';
         default: return '';
     }
 }
@@ -19,69 +22,95 @@ const getLevelDescription = (level: string) => {
 const getSystemPrompt = (language: Language, level: string = 'N5'): string => {
   if (language === Language.JAPANESE) {
     const levelDescription = getLevelDescription(level);
-    const useKanji = ['N4', 'N3', 'N2', 'N1'].includes(level);
+    return `You are a friendly and patient Japanese language tutor named "Aki". Your role is to help me practice conversational Japanese.
 
-    return `あなたは親切で忍耐強い日本語の先生「アキ」です。私の日本語の会話練習を手伝うのがあなたの役割です。
+Current Level Setting: ${levelDescription}
 
-現在のレベル設定: ${levelDescription}
-
-**あなたの返答に関する厳格なルール:**
-1. 最初に、ユーザーへの日本語の返答を書いてください。
-   ${useKanji 
-     ? '- 漢字を使用できますが、必ず全ての漢字に<ruby>タグでふりがなを付けてください。例: <ruby>日本語<rt>にほんご</rt></ruby>' 
-     : '- 漢字は使わず、ひらがなとカタカナのみを使用してください。'}
-2. 日本語の返答の後に、必ず \`---\` という区切り線を入れてください。
-3. 区切り線の後、新しい行に \`Speech:\` と書き、その後に音声再生用のひらがな・カタカナのみのテキストを続けてください。
-4. さらに新しい行に \`Romaji:\` と書き、その後にローマ字表記を続けてください。
-
-**例 (${level}):**
-${level === 'N5' ? 
-`こんにちは。おげんきですか。
----
-Speech: こんにちは。おげんきですか。
-Romaji: Konnichiwa. Ogenki desu ka.` : 
-`はい、<ruby>今日<rt>きょう</rt></ruby>は<ruby>学校<rt>がっこう</rt></ruby>に<ruby>行<rt>い</rt></ruby>きました。
----
-Speech: はい、きょうはがっこうにいきました。
-Romaji: Hai, kyou wa gakkou ni ikimashita.`
-}
+**Strict Rules for Your Response:**
+1. You MUST reply with a single JSON object. Do not add any text before or after the JSON.
+2. The JSON object must conform to the provided schema.
+3. Your goal is to have a natural conversation, but your output must be the structured JSON.
+4. For the 'breakdown' array, analyze your Japanese response sentence. Break it down into logical words or particles. For each, provide the original Japanese word, its Romaji transcription, and its meaning in SPANISH.
 `;
   }
   return "You are a friendly and patient English language tutor. Your name is Alex. Your goal is to help me practice conversational English. Keep your responses natural, engaging, and not too long. Correct my grammar mistakes gently if you spot any. Respond with text only, do not use markdown.";
 };
 
+const japaneseResponseSchema = {
+    type: Type.OBJECT,
+    properties: {
+        displayText: { 
+            type: Type.STRING,
+            description: "The Japanese response for display. Use Kanji according to the level, but ALWAYS provide furigana for all Kanji using <ruby> tags. Example: <ruby>日本語<rt>にほんご</rt></ruby>."
+        },
+        speechText: {
+            type: Type.STRING,
+            description: "The same response but in plain hiragana/katakana ONLY, for text-to-speech."
+        },
+        romajiText: {
+            type: Type.STRING,
+            description: "The Romaji transcription of the full response."
+        },
+        breakdown: {
+            type: Type.ARRAY,
+            description: "An array breaking down the Japanese sentence into words/particles.",
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    word: { type: Type.STRING, description: "A single word or particle from the sentence (e.g., <ruby>私<rt>わたし</rt></ruby>, の, <ruby>名前<rt>なまえ</rt></ruby>)." },
+                    romaji: { type: Type.STRING, description: "The Romaji for that word." },
+                    spanish: { type: Type.STRING, description: "The SPANISH meaning of that word." }
+                },
+                required: ["word", "romaji", "spanish"]
+            }
+        }
+    },
+    required: ["displayText", "speechText", "romajiText", "breakdown"]
+};
+
+
+const getSpokenLevelDescription = (level: string): string => {
+    switch (level) {
+        case 'N5': return '初心者レベル（N5）：基本的な語彙と文法を使い、挨拶や自己紹介などの日常会話に集中します。漢字は使いません。';
+        case 'N4': return '初級レベル（N4）：日常の活動や買い物などについて話すための基本的な語彙と文法を使います。簡単で一般的な漢字を使い始めることができますが、会話では自然に話してください。';
+        case 'N3': return '中級レベル（N3）：より複雑な状況に対応するために、より広い範囲の語彙と文法を使います。自然な会話を心がけてください。';
+        case 'N2': return '中上級レベル（N2）：ニュースや仕事の話題に関する会話に適した、より複雑な文法と語彙を使います。';
+        case 'N1': return '上級レベル（N1）：ネイティブに近い能力で会話します。慣用句、専門用語、複雑な文法構造を使います。';
+        default: return '';
+    }
+};
+
 
 const getSpokenModeSystemPrompt = (language: Language, level: string = 'N5'): string => {
   if (language === Language.JAPANESE) {
-    const levelDescription = getLevelDescription(level);
-    return `あなたは日本語の先生「アキ」です。私と音声で会話をします。
+    const levelDescription = getSpokenLevelDescription(level);
+    return `You are Aki, a conversational AI Japanese tutor. Your only job is to have a natural Japanese conversation with the user.
 
-**現在のレベル設定: ${levelDescription}**
+**Strict Rules for Your TEXT Response (sent along with your voice):**
+1.  **NEVER output your thought process or meta-commentary.** Your response must ONLY be the text in the specified format.
+2.  The format must be:
+    -   Line 1: Your spoken response in Japanese, with Kanji and Furigana (<ruby>タグ).
+    -   Line 2: \`---\`
+    -   Line 3: \`Romaji: [Your full sentence in Romaji]\`
+    -   Line 4: \`---\`
+    -   Line 5: \`Breakdown:\`
+    -   Following lines: Each line must be a word analysis in the format \`Japanese Word | Romaji | Spanish Meaning\`.
 
-あなたには「音声」と「テキスト」という2つの出力方法があります。
+**Example:**
+<ruby>今日<rt>きょう</rt></ruby>は<ruby>良<rt>い</rt></ruby>い<ruby>天気<rt>てんき</rt></ruby>ですね。
+---
+Romaji: Kyō wa ii tenki desu ne.
+---
+Breakdown:
+<ruby>今日<rt>きょう</rt></ruby> | kyō | hoy
+は | wa | (partícula de tema)
+<ruby>良<rt>い</rt></ruby>い | ii | buen
+<ruby>天気<rt>てんき</rt></ruby> | tenki | tiempo (clima)
+ですね | desu ne | ¿verdad? / es
 
-**厳格なルール:**
-
-1.  **音声出力:**
-    *   **日本語の文章のみ**を話してください。
-    *   あなたの会話は、上記で指定されたJLPTレベルの難易度に厳密に従ってください。
-    *   自然で、長すぎない会話を心がけてください。
-    *   **絶対に、絶対にローマ字を声に出して読まないでください。**
-
-2.  **テキスト出力:**
-    *   あなたのテキストは、改行で区切られた2つのパートでなければなりません。
-    *   **パート1:** あなたが音声で話した日本語の文章（ひらがなとカタカナのみ、漢字なし）。
-    *   **パート2:** \`Romaji: \`という接頭辞の後に、その日本語の文章の正確なローマ字表記を続けてください。この行には日本語の文字を含めないでください。
-
-**例:**
-*   **あなたの音声出力:** 「げんきですか。」 (これだけを話す)
-*   **あなたのテキスト出力:**
-    げんきですか。
-    Romaji: Genki desu ka.
-
-**結論:** 音声は純粋な日本語、テキストは日本語とローマ字の両方です。このルールは絶対に守ってください。`;
+Current conversation level: ${levelDescription}`;
   }
-  return "You are Alex, an English tutor. I am practicing speaking with you. Respond naturally. The system will transcribe your audio response. Correct my grammar mistakes gently.";
+  return "You are Alex, a conversational AI language tutor. Your only job is to have a natural English conversation with the user. Do not, under any circumstances, output your thought process, plans, or any meta-commentary. Your entire response must be only the text you would speak in a conversation. Just act like a human, listen, and respond.";
 };
 
 const getWelcomeMessage = (language: Language): ChatMessage => {
@@ -94,9 +123,26 @@ const getWelcomeMessage = (language: Language): ChatMessage => {
     }
     return {
         role: 'model',
-        text: "こんにちは！アキです。にほんごのれんしゅうをはじめましょうか？なんでもきいてくださいね！",
+        text: "<ruby>こんにちは<rt>こんにちは</rt></ruby>！アキです。<ruby>日本語<rt>にほんご</rt></ruby>の<ruby>練習<rt>れんしゅう</rt></ruby>を<ruby>始<rt>はじ</rt></ruby>めましょうか？なんでも<ruby>聞<rt>き</rt></ruby>いてくださいね！",
         speech: "こんにちは！アキです。にほんごのれんしゅうをはじめましょうか？なんでもきいてくださいね！",
-        romaji: "Konnichiwa! Aki desu. Nihongo no renshū o hajimemashō ka? Nandemo kiite kudasai ne!"
+        romaji: "Konnichiwa! Aki desu. Nihongo no renshū o hajimemashō ka? Nandemo kiite kudasai ne!",
+        breakdown: [
+            { word: 'こんにちは', romaji: 'konnichiwa', spanish: 'hola' },
+            { word: '！', romaji: '!', spanish: '(puntuación)' },
+            { word: 'アキ', romaji: 'Aki', spanish: 'Aki (nombre)' },
+            { word: 'です', romaji: 'desu', spanish: 'soy / es' },
+            { word: '。', romaji: '.', spanish: '(puntuación)' },
+            { word: '<ruby>日本語<rt>にほんご</rt></ruby>', romaji: 'nihongo', spanish: 'idioma japonés' },
+            { word: 'の', romaji: 'no', spanish: 'de (partícula)' },
+            { word: '<ruby>練習<rt>れんしゅう</rt></ruby>', romaji: 'renshū', spanish: 'práctica' },
+            { word: 'を', romaji: 'o', spanish: '(partícula de objeto)' },
+            { word: '<ruby>始<rt>はじ</rt></ruby>めましょう', romaji: 'hajimemashō', spanish: 'empecemos' },
+            { word: 'か', romaji: 'ka', spanish: '(partícula de pregunta)' },
+            { word: '？', romaji: '?', spanish: '(puntuación)' },
+            { word: 'なんでも', romaji: 'nandemo', spanish: 'cualquier cosa' },
+            { word: '<ruby>聞<rt>き</rt></ruby>いてください', romaji: 'kiite kudasai', spanish: 'pregunta por favor' },
+            { word: 'ね', romaji: 'ne', spanish: '(partícula de énfasis)' },
+        ]
     };
 }
 
@@ -137,12 +183,13 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
-  const [audioCache, setAudioCache] = useState<Record<string, AudioBuffer>>({});
   const [loadingAudio, setLoadingAudio] = useState<string | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
 
-  const chatRef = useRef<Chat | null>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const audioCacheRef = useRef<Record<string, AudioBuffer>>({});
   
   useEffect(() => {
     const key = process.env.API_KEY;
@@ -161,7 +208,7 @@ const App: React.FC = () => {
   }, []);
 
   const fetchAndCacheAudio = useCallback(async (text: string) => {
-    if (!text || audioCache[text] || !apiKey) return;
+    if (!text || audioCacheRef.current[text] || !apiKey) return;
 
     try {
       const ai = new GoogleGenAI({ apiKey });
@@ -170,49 +217,33 @@ const App: React.FC = () => {
         contents: [{ parts: [{ text }] }],
         config: {
           responseModalities: [Modality.AUDIO],
-          speechConfig: { voiceConfig: { voiceName: language === Language.JAPANESE ? 'Kore' : 'Zephyr' } },
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: language === Language.JAPANESE ? 'Kore' : 'Zephyr' } } },
         },
       });
       const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
       if (base64Audio) {
         const audioContext = getAudioContext();
         const audioBuffer = await decodeAudioData(decode(base64Audio), audioContext, 24000, 1);
-        setAudioCache(prev => ({ ...prev, [text]: audioBuffer }));
+        audioCacheRef.current[text] = audioBuffer;
       }
     } catch (e) {
       console.error("Failed to pre-fetch audio:", e);
     }
-  }, [apiKey, audioCache, getAudioContext, language]);
+  }, [apiKey, getAudioContext, language]);
 
 
   const initializeChat = useCallback(() => {
-    if (!apiKey) return;
     setError(null);
-    setIsLoading(true);
-    try {
-        const ai = new GoogleGenAI({ apiKey });
-        const systemInstruction = getSystemPrompt(language, level);
-        
-        chatRef.current = ai.chats.create({
-            model: 'gemini-2.5-flash',
-            config: { systemInstruction },
-        });
-
-        const welcomeMessage = getWelcomeMessage(language);
-        setMessages([welcomeMessage]);
-        fetchAndCacheAudio(welcomeMessage.speech || welcomeMessage.text);
-    } catch (e) {
-        setError(e instanceof Error ? e.message : "An unknown error occurred during initialization.");
-    } finally {
-        setIsLoading(false);
-    }
-  }, [language, level, apiKey, fetchAndCacheAudio]);
+    const welcomeMessage = getWelcomeMessage(language);
+    setMessages([welcomeMessage]);
+    if(welcomeMessage.speech) fetchAndCacheAudio(welcomeMessage.speech);
+  }, [language, fetchAndCacheAudio]);
 
   useEffect(() => {
     if (apiKey) {
       initializeChat();
     }
-  }, [initializeChat, apiKey]);
+  }, [initializeChat, apiKey, language]);
   
   useEffect(() => {
     if (chatContainerRef.current) {
@@ -223,81 +254,61 @@ const App: React.FC = () => {
   const handleSendMessage = async () => {
     if (!userInput.trim() || isLoading || !apiKey) return;
 
-    const userMessage: ChatMessage = { role: 'user', text: userInput, speech: userInput };
-    setMessages(prev => [...prev, userMessage, { role: 'model', text: '' }]);
-    const currentInput = userInput;
+    const userMessage: ChatMessage = { role: 'user', text: userInput };
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
     setUserInput('');
     setIsLoading(true);
     setError(null);
 
     try {
-      if (!chatRef.current) {
-        throw new Error("Chat is not initialized.");
-      }
-      
-      const responseStream = await chatRef.current.sendMessageStream({ message: currentInput });
+        const ai = new GoogleGenAI({ apiKey });
+        const systemInstruction = getSystemPrompt(language, level);
+        
+        const contents: Content[] = newMessages.map(msg => ({
+            role: msg.role,
+            parts: [{ text: msg.role === 'model' && msg.speech ? msg.speech : msg.text }],
+        }));
 
-      let fullResponseText = '';
-      for await (const chunk of responseStream) {
-        const chunkText = chunk.text;
-        if (chunkText) {
-            fullResponseText += chunkText;
-            setMessages(prev => {
-                const newMessages = [...prev];
-                const lastMessage = newMessages[newMessages.length - 1];
-                if (lastMessage.role === 'model') {
-                    if (language === Language.JAPANESE) {
-                        lastMessage.text = fullResponseText.split('---')[0];
-                    } else {
-                        lastMessage.text = fullResponseText;
-                    }
-                }
-                return newMessages;
-            });
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: contents,
+            config: {
+                systemInstruction,
+                ...(language === Language.JAPANESE && {
+                    responseMimeType: 'application/json',
+                    responseSchema: japaneseResponseSchema
+                })
+            }
+        });
+        
+        const responseText = response.text.trim();
+        let modelMessage: ChatMessage;
+
+        if (language === Language.JAPANESE) {
+            const parsedJson = JSON.parse(responseText);
+            modelMessage = {
+                role: 'model',
+                text: parsedJson.displayText,
+                speech: parsedJson.speechText,
+                romaji: parsedJson.romajiText,
+                breakdown: parsedJson.breakdown,
+            };
+        } else {
+            modelMessage = {
+                role: 'model',
+                text: responseText,
+                speech: responseText,
+            };
         }
-      }
-
-      setMessages(prev => {
-          const newMessages = [...prev];
-          const lastMessage = newMessages[newMessages.length - 1];
-          if (lastMessage.role === 'model') {
-              let finalMessage: ChatMessage;
-              if (language === Language.JAPANESE) {
-                  const parts = fullResponseText.split('---');
-                  const japaneseText = parts[0]?.trim() || '';
-                  const metaContent = parts[1] || '';
-                  
-                  const speechMatch = metaContent.match(/Speech:\s*(.*)/);
-                  const romajiMatch = metaContent.match(/Romaji:\s*(.*)/);
-
-                  finalMessage = {
-                      role: 'model',
-                      text: japaneseText,
-                      speech: speechMatch ? speechMatch[1].trim() : '',
-                      romaji: romajiMatch ? romajiMatch[1].trim() : '',
-                  };
-              } else {
-                  finalMessage = { role: 'model', text: fullResponseText, speech: fullResponseText };
-              }
-              newMessages[newMessages.length - 1] = finalMessage;
-              fetchAndCacheAudio(finalMessage.speech || finalMessage.text);
-          }
-          return newMessages;
-      });
+        
+        setMessages(prev => [...prev, modelMessage]);
+        if(modelMessage.speech) fetchAndCacheAudio(modelMessage.speech);
 
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : "Failed to get a response.";
       setError(errorMessage);
-      setMessages(prev => {
-          const newMessages = [...prev];
-          const lastMessage = newMessages[newMessages.length - 1];
-          if (lastMessage.role === 'model' && lastMessage.text === '') {
-              newMessages[newMessages.length - 1] = {role: 'model', text: `Sorry, an error occurred: ${errorMessage}`};
-          } else {
-              newMessages.push({role: 'model', text: `Sorry, an error occurred: ${errorMessage}`});
-          }
-          return newMessages;
-      });
+       setMessages(prev => [...prev, {role: 'model', text: `Sorry, an error occurred: ${errorMessage}`}]);
     } finally {
       setIsLoading(false);
     }
@@ -307,10 +318,10 @@ const App: React.FC = () => {
   const playAudio = async (text: string) => {
     if (!text || loadingAudio === text || !apiKey) return;
     
-    if (audioCache[text]) {
+    if (audioCacheRef.current[text]) {
       const audioContext = getAudioContext();
       const source = audioContext.createBufferSource();
-      source.buffer = audioCache[text];
+      source.buffer = audioCacheRef.current[text];
       source.connect(audioContext.destination);
       source.start();
       return;
@@ -325,7 +336,7 @@ const App: React.FC = () => {
         contents: [{ parts: [{ text }] }],
         config: {
           responseModalities: [Modality.AUDIO],
-          speechConfig: { voiceConfig: { voiceName: language === Language.JAPANESE ? 'Kore' : 'Zephyr' } },
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: language === Language.JAPANESE ? 'Kore' : 'Zephyr' } } },
         },
       });
 
@@ -333,7 +344,7 @@ const App: React.FC = () => {
       if (base64Audio) {
         const audioContext = getAudioContext();
         const audioBuffer = await decodeAudioData(decode(base64Audio), audioContext, 24000, 1);
-        setAudioCache(prev => ({ ...prev, [text]: audioBuffer }));
+        audioCacheRef.current[text] = audioBuffer;
         
         const source = audioContext.createBufferSource();
         source.buffer = audioBuffer;
@@ -347,95 +358,106 @@ const App: React.FC = () => {
     }
   };
 
+  const handleOpenModal = (message: ChatMessage) => {
+    if (message.breakdown && message.breakdown.length > 0) {
+        setSelectedMessage(message);
+        setIsModalOpen(true);
+    }
+  };
 
   const renderWrittenMode = () => (
-    <div className="flex flex-col h-full w-full max-w-4xl mx-auto bg-gray-800 rounded-2xl shadow-2xl p-6">
-      <div ref={chatContainerRef} className="flex-grow overflow-y-auto mb-4 pr-4 space-y-4">
-        {messages.map((msg, index) => (
-          <div key={index} className={`flex items-start gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
-            {msg.role === 'model' && (
-              <button
-                onClick={() => playAudio(msg.speech || msg.text)}
-                disabled={loadingAudio === (msg.speech || msg.text) || !apiKey || !msg.speech}
-                className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center flex-shrink-0 transition-transform duration-200 ease-in-out hover:scale-110 disabled:scale-100 disabled:cursor-not-allowed disabled:bg-gray-600"
-                aria-label="Play audio for this message"
-              >
-                {loadingAudio === (msg.speech || msg.text) ? (
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                ) : (
-                  <BotIcon className="w-5 h-5 text-white" />
-                )}
-              </button>
-            )}
-            <div className={`max-w-md p-4 rounded-2xl ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-gray-700 text-gray-200 rounded-bl-none'}`}>
-              {msg.role === 'user' ? (
-                <p>{msg.text}</p>
-              ) : (
-                <>
-                  <JapaneseText text={msg.text} />
-                  {msg.romaji && (
-                    <p className="pt-2 mt-2 border-t border-gray-600 text-sm text-gray-400 font-mono tracking-wide">
-                      {msg.romaji}
-                    </p>
-                  )}
-                </>
-              )}
-               {msg.role === 'user' && (
-                 <div className="w-full flex justify-end">
-                    <button
-                      onClick={() => playAudio(msg.speech || msg.text)}
-                      disabled={loadingAudio === (msg.speech || msg.text) || !apiKey}
-                      className={`mt-2 text-blue-200 hover:text-white disabled:text-gray-400`}
-                      aria-label="Play audio for this message"
-                    >
-                    {loadingAudio === (msg.speech || msg.text) ? (
-                        <div className="w-5 h-5 flex items-center justify-center">
-                          <div className="w-4 h-4 border-2 border-blue-200 border-t-transparent rounded-full animate-spin"></div>
-                        </div>
-                    ) : (
-                        <VolumeUpIcon className="w-5 h-5"/>
-                    )}
-                    </button>
-                 </div>
-               )}
-            </div>
-          </div>
-        ))}
-        {isLoading && messages[messages.length - 1]?.role === 'model' && !messages[messages.length - 1]?.text && (
-             <div className="flex items-start gap-3">
-                 <div className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center flex-shrink-0">
+    <>
+      <WordBreakdownModal isOpen={isModalOpen} message={selectedMessage} onClose={() => setIsModalOpen(false)} />
+      <div className="flex flex-col h-full w-full max-w-4xl mx-auto bg-gray-800 rounded-2xl shadow-2xl p-6">
+        <div ref={chatContainerRef} className="flex-grow overflow-y-auto mb-4 pr-4 space-y-4">
+          {messages.map((msg, index) => (
+            <div key={index} className={`flex items-start gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+              {msg.role === 'model' && (
+                <button
+                  onClick={() => playAudio(msg.speech || msg.text)}
+                  disabled={loadingAudio === (msg.speech || msg.text) || !apiKey || !msg.speech}
+                  className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center flex-shrink-0 transition-transform duration-200 ease-in-out hover:scale-110 disabled:scale-100 disabled:cursor-not-allowed disabled:bg-gray-600"
+                  aria-label="Play audio for this message"
+                >
+                  {loadingAudio === (msg.speech || msg.text) ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  ) : (
                     <BotIcon className="w-5 h-5 text-white" />
-                 </div>
-                 <div className="max-w-md p-4 rounded-2xl bg-gray-700 text-gray-200 rounded-bl-none flex items-center">
-                    <div className="w-2 h-2 bg-teal-400 rounded-full animate-pulse mr-2"></div>
-                    <div className="w-2 h-2 bg-teal-400 rounded-full animate-pulse mr-2 delay-150"></div>
-                    <div className="w-2 h-2 bg-teal-400 rounded-full animate-pulse delay-300"></div>
-                 </div>
-             </div>
-        )}
-      </div>
-      <div className="flex-shrink-0">
-         {error && <p className="text-red-400 text-sm text-center mb-2">{error}</p>}
-        <div className="flex items-center bg-gray-700 rounded-xl p-2">
-          <input
-            type="text"
-            value={userInput}
-            onChange={(e) => setUserInput(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-            placeholder={language === Language.ENGLISH ? "Type your message..." : "メッセージを入力..."}
-            className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-gray-400"
-            disabled={isLoading || !apiKey}
-          />
-          <button
-            onClick={handleSendMessage}
-            disabled={isLoading || !userInput.trim() || !apiKey}
-            className="p-2 rounded-lg bg-blue-600 text-white disabled:bg-gray-500 transition-colors"
-          >
-            <SendIcon className="w-5 h-5"/>
-          </button>
+                  )}
+                </button>
+              )}
+              <div
+                onClick={() => msg.role === 'model' && handleOpenModal(msg)}
+                className={`max-w-md p-4 rounded-2xl ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : `bg-gray-700 text-gray-200 rounded-bl-none ${msg.breakdown ? 'cursor-pointer hover:bg-gray-600' : ''}`}`}>
+                {msg.role === 'user' ? (
+                  <p>{msg.text}</p>
+                ) : (
+                  <>
+                    <JapaneseText text={msg.text} />
+                    {msg.romaji && (
+                      <p className="pt-2 mt-2 border-t border-gray-600 text-sm text-gray-400 font-mono tracking-wide">
+                        {msg.romaji}
+                      </p>
+                    )}
+                  </>
+                )}
+                {msg.role === 'user' && msg.speech && (
+                  <div className="w-full flex justify-end">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); playAudio(msg.speech!); }}
+                        disabled={loadingAudio === (msg.speech || msg.text) || !apiKey}
+                        className={`mt-2 text-blue-200 hover:text-white disabled:text-gray-400`}
+                        aria-label="Play audio for this message"
+                      >
+                      {loadingAudio === (msg.speech || msg.text) ? (
+                          <div className="w-5 h-5 flex items-center justify-center">
+                            <div className="w-4 h-4 border-2 border-blue-200 border-t-transparent rounded-full animate-spin"></div>
+                          </div>
+                      ) : (
+                          <VolumeUpIcon className="w-5 h-5"/>
+                      )}
+                      </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+          {isLoading && (
+              <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center flex-shrink-0">
+                      <BotIcon className="w-5 h-5 text-white" />
+                  </div>
+                  <div className="max-w-md p-4 rounded-2xl bg-gray-700 text-gray-200 rounded-bl-none flex items-center">
+                      <div className="w-2 h-2 bg-teal-400 rounded-full animate-pulse mr-2"></div>
+                      <div className="w-2 h-2 bg-teal-400 rounded-full animate-pulse mr-2 delay-150"></div>
+                      <div className="w-2 h-2 bg-teal-400 rounded-full animate-pulse delay-300"></div>
+                  </div>
+              </div>
+          )}
+        </div>
+        <div className="flex-shrink-0">
+          {error && <p className="text-red-400 text-sm text-center mb-2">{error}</p>}
+          <div className="flex items-center bg-gray-700 rounded-xl p-2">
+            <input
+              type="text"
+              value={userInput}
+              onChange={(e) => setUserInput(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+              placeholder={language === Language.ENGLISH ? "Type your message..." : "メッセージを入力..."}
+              className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-gray-400"
+              disabled={isLoading || !apiKey}
+            />
+            <button
+              onClick={handleSendMessage}
+              disabled={isLoading || !userInput.trim() || !apiKey}
+              className="p-2 rounded-lg bg-blue-600 text-white disabled:bg-gray-500 transition-colors"
+            >
+              <SendIcon className="w-5 h-5"/>
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
   
   const renderAppContent = () => {
