@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, Blob, Part } from '@google/genai';
+// FIX: The `LiveSession` type is not exported from the `@google/genai` library.
+import { GoogleGenAI, LiveServerMessage, Modality, Blob, Part } from '@google/genai';
 import { Language, ChatMessage, BreakdownEntry } from '../types';
 import { MicrophoneIcon, StopIcon, PauseIcon } from './icons';
 import { encode, decode, decodeAudioData } from '../utils/audio';
@@ -11,9 +12,10 @@ type RecordingState = 'idle' | 'connecting' | 'recording' | 'paused';
 interface ConversationViewProps {
   language: Language;
   systemInstruction: string;
+  apiKey: string;
 }
 
-const ConversationView: React.FC<ConversationViewProps> = ({ language, systemInstruction }) => {
+const ConversationView: React.FC<ConversationViewProps> = ({ language, systemInstruction, apiKey }) => {
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [transcriptionHistory, setTranscriptionHistory] = useState<ChatMessage[]>([]);
   const [currentInput, setCurrentInput] = useState('');
@@ -22,7 +24,8 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
 
-  const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
+  // FIX: The `LiveSession` type is not exported from the library. Using `any` as a fallback for the session promise.
+  const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
@@ -99,7 +102,8 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
   }, []);
 
   const startConversation = useCallback(async () => {
-    if (recordingState !== 'idle') {
+    if (recordingState !== 'idle' || !apiKey) {
+      setError("API Key not available.");
       return;
     }
     
@@ -113,7 +117,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
     setRecordingState('connecting');
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
@@ -250,7 +254,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, systemIns
       setError(`Error: ${errorMessage}`);
       setRecordingState('idle');
     }
-  }, [recordingState, systemInstruction, stopConversation, language, pauseRecording]);
+  }, [recordingState, systemInstruction, stopConversation, language, pauseRecording, apiKey]);
 
   useEffect(() => {
     return () => {

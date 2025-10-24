@@ -1,5 +1,10 @@
-// This API route is not used by the application, but a valid
-// function is required here to prevent Vercel build errors.
+// This API route securely provides the API key from server-side
+// environment variables to the client-side application.
 export default (req, res) => {
-  res.status(200).send('This API route is not in use.');
+  const apiKey = process.env.API_KEY;
+  if (apiKey) {
+    res.status(200).json({ apiKey });
+  } else {
+    res.status(500).json({ error: 'API_KEY environment variable not set on the server.' });
+  }
 };

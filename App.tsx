@@ -173,6 +173,8 @@ const JapaneseText: React.FC<{ text: string }> = ({ text }) => {
 };
 
 const App: React.FC = () => {
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const [language, setLanguage] = useState<Language>(Language.ENGLISH);
   const [level, setLevel] = useState<string>('N5');
   const [mode, setMode] = useState<Mode>(Mode.WRITTEN);
@@ -184,9 +186,33 @@ const App: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
 
+  const aiClient = useRef<GoogleGenAI | null>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioCacheRef = useRef<Record<string, AudioBuffer>>({});
+
+  useEffect(() => {
+    const fetchKey = async () => {
+      try {
+        const response = await fetch('/api/get-key');
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({ error: 'Failed to fetch API key from server.' }));
+          throw new Error(errData.error || 'Check Vercel environment variables.');
+        }
+        const data = await response.json();
+        if (data.apiKey) {
+          setApiKey(data.apiKey);
+          aiClient.current = new GoogleGenAI({ apiKey: data.apiKey });
+        } else {
+          throw new Error('API key not found in server response.');
+        }
+      } catch (err) {
+        console.error(err);
+        setApiKeyError(err instanceof Error ? err.message : String(err));
+      }
+    };
+    fetchKey();
+  }, []);
 
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
@@ -196,11 +222,10 @@ const App: React.FC = () => {
   }, []);
 
   const fetchAndCacheAudio = useCallback(async (text: string) => {
-    if (!text || audioCacheRef.current[text]) return;
+    if (!text || audioCacheRef.current[text] || !aiClient.current) return;
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
+      const response = await aiClient.current.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
         contents: [{ parts: [{ text }] }],
         config: {
@@ -228,8 +253,10 @@ const App: React.FC = () => {
   }, [language, fetchAndCacheAudio]);
 
   useEffect(() => {
-    initializeChat();
-  }, [initializeChat, language]);
+    if (apiKey) {
+      initializeChat();
+    }
+  }, [initializeChat, language, apiKey]);
   
   useEffect(() => {
     if (chatContainerRef.current) {
@@ -238,7 +265,7 @@ const App: React.FC = () => {
   }, [messages]);
 
   const handleSendMessage = async () => {
-    if (!userInput.trim() || isLoading) return;
+    if (!userInput.trim() || isLoading || !aiClient.current) return;
 
     const userMessage: ChatMessage = { role: 'user', text: userInput };
     const newMessages = [...messages, userMessage];
@@ -248,7 +275,6 @@ const App: React.FC = () => {
     setError(null);
 
     try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const systemInstruction = getSystemPrompt(language, level);
         
         const contents: Content[] = newMessages.map(msg => ({
@@ -256,7 +282,7 @@ const App: React.FC = () => {
             parts: [{ text: msg.role === 'model' && msg.speech ? msg.speech : msg.text }],
         }));
 
-        const response = await ai.models.generateContent({
+        const response = await aiClient.current.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: contents,
             config: {
@@ -302,7 +328,7 @@ const App: React.FC = () => {
 
 
   const playAudio = async (text: string) => {
-    if (!text || loadingAudio === text) return;
+    if (!text || loadingAudio === text || !aiClient.current) return;
     
     if (audioCacheRef.current[text]) {
       const audioContext = getAudioContext();
@@ -316,8 +342,7 @@ const App: React.FC = () => {
     setLoadingAudio(text);
     setError(null);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
+      const response = await aiClient.current.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
         contents: [{ parts: [{ text }] }],
         config: {
@@ -446,6 +471,79 @@ const App: React.FC = () => {
       </div>
     </>
   );
+  
+  const renderAppContent = () => {
+    if (apiKeyError) {
+      return (
+        <div className="w-full max-w-4xl mx-auto text-center p-8 bg-gray-800 rounded-2xl">
+          <h2 className="text-2xl font-bold text-red-500 mb-4">Error de Configuración</h2>
+          <p className="text-gray-300 mb-2">No se pudo inicializar la aplicación.</p>
+          <p className="text-red-400 bg-gray-900 p-3 rounded-lg font-mono text-sm">{apiKeyError}</p>
+        </div>
+      );
+    }
+
+    if (!apiKey) {
+      return (
+        <div className="w-full max-w-4xl mx-auto text-center p-8">
+          <div className="flex justify-center items-center gap-4">
+            <div className="w-8 h-8 border-4 border-teal-400 border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-xl text-gray-300">Inicializando el coach de idiomas...</p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <>
+        <div className="w-full max-w-4xl mx-auto mb-6 p-2 bg-gray-800 rounded-xl flex flex-col sm:flex-row justify-center items-center gap-4 shadow-lg">
+            <div className="flex gap-2">
+                {[Language.ENGLISH, Language.JAPANESE].map(lang => (
+                  <button key={lang} onClick={() => setLanguage(lang)} 
+                    className={`px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${language === lang ? 'bg-teal-500 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>
+                    {lang}
+                  </button>
+                ))}
+            </div>
+
+            {language === Language.JAPANESE && (
+              <>
+                <div className="w-px h-6 bg-gray-600 hidden sm:block"></div>
+                <div className="flex items-center gap-1 sm:gap-2">
+                  {[
+                    { value: 'N5', description: 'Principiante' },
+                    { value: 'N4', description: 'Básico' },
+                    { value: 'N3', description: 'Intermedio' },
+                    { value: 'N2', description: 'Avanzado' },
+                    { value: 'N1', description: 'Experto' },
+                  ].map(lvl => (
+                    <button key={lvl.value} onClick={() => setLevel(lvl.value)}
+                      title={`${lvl.value} - ${lvl.description}`}
+                      className={`px-2 py-1 w-20 h-12 text-center text-xs sm:text-sm font-semibold rounded-lg transition-colors flex flex-col justify-center items-center leading-tight ${level === lvl.value ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>
+                      <span className="font-bold text-sm sm:text-base">{lvl.value}</span>
+                      <span className="text-[10px] sm:text-xs opacity-80">{lvl.description}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <div className="w-px h-6 bg-gray-600 hidden sm:block"></div>
+            <div className="flex gap-2">
+                {[Mode.WRITTEN, Mode.SPOKEN].map(m => (
+                    <button key={m} onClick={() => setMode(m)}
+                    className={`px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${mode === m ? 'bg-blue-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>
+                    {m} Practice
+                    </button>
+                ))}
+            </div>
+          </div>
+          <main className="w-full flex-grow flex items-center justify-center">
+              {mode === Mode.WRITTEN ? renderWrittenMode() : <ConversationView language={language} systemInstruction={getSpokenModeSystemPrompt(language, level)} apiKey={apiKey} />}
+          </main>
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-900 font-sans text-white p-4 sm:p-8 flex flex-col items-center">
@@ -456,52 +554,8 @@ const App: React.FC = () => {
         <p className="text-gray-400 mt-2">Your AI partner for mastering a new language.</p>
       </header>
       
-      <div className="w-full max-w-4xl mx-auto mb-6 p-2 bg-gray-800 rounded-xl flex flex-col sm:flex-row justify-center items-center gap-4 shadow-lg">
-        <div className="flex gap-2">
-            {[Language.ENGLISH, Language.JAPANESE].map(lang => (
-              <button key={lang} onClick={() => setLanguage(lang)} 
-                className={`px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${language === lang ? 'bg-teal-500 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>
-                {lang}
-              </button>
-            ))}
-        </div>
+      {renderAppContent()}
 
-        {language === Language.JAPANESE && (
-          <>
-            <div className="w-px h-6 bg-gray-600 hidden sm:block"></div>
-            <div className="flex items-center gap-1 sm:gap-2">
-              {[
-                { value: 'N5', description: 'Principiante' },
-                { value: 'N4', description: 'Básico' },
-                { value: 'N3', description: 'Intermedio' },
-                { value: 'N2', description: 'Avanzado' },
-                { value: 'N1', description: 'Experto' },
-              ].map(lvl => (
-                <button key={lvl.value} onClick={() => setLevel(lvl.value)}
-                  title={`${lvl.value} - ${lvl.description}`}
-                  className={`px-2 py-1 w-20 h-12 text-center text-xs sm:text-sm font-semibold rounded-lg transition-colors flex flex-col justify-center items-center leading-tight ${level === lvl.value ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>
-                  <span className="font-bold text-sm sm:text-base">{lvl.value}</span>
-                  <span className="text-[10px] sm:text-xs opacity-80">{lvl.description}</span>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        <div className="w-px h-6 bg-gray-600 hidden sm:block"></div>
-        <div className="flex gap-2">
-            {[Mode.WRITTEN, Mode.SPOKEN].map(m => (
-                <button key={m} onClick={() => setMode(m)}
-                className={`px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${mode === m ? 'bg-blue-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>
-                {m} Practice
-                </button>
-            ))}
-        </div>
-      </div>
-
-      <main className="w-full flex-grow flex items-center justify-center">
-          {mode === Mode.WRITTEN ? renderWrittenMode() : <ConversationView language={language} systemInstruction={getSpokenModeSystemPrompt(language, level)} />}
-      </main>
     </div>
   );
 };
