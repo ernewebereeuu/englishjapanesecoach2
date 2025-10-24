@@ -1,0 +1,7 @@
+{
+  "name": "Gemini Language Coach",
+  "description": "An AI-powered language learning chatbot to practice conversational and written English or Japanese. Features real-time voice conversations, native voice playback, and persistent chat memory.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
