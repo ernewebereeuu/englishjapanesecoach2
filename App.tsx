@@ -7,22 +7,54 @@ import ConversationView from './components/ConversationView';
 
 const getSystemPrompt = (language: Language, level: string = 'N5'): string => {
   if (language === Language.JAPANESE) {
-    return `あなたは親切で忍耐強い日本語の先生です。名前は「アキ」です。私の日本語の会話練習を手伝うのがあなたの役割です。
-自然で魅力的な、長すぎない返事を心がけてください。
+    return `あなたは親切で忍耐強い日本語の先生「アキ」です。私の日本語の会話練習を手伝うのがあなたの役割です。
 あなたの語彙と文法を日本語能力試験（JLPT）の${level}レベルに合わせてください。
 もし文法の間違いを見つけたら、優しく訂正してください。
-重要：あなたの返答は必ず、次のキーを持つJSONオブジェクトでなければなりません：
-1. "japanese": HTMLのルビタグを使ってふりがなを付けた、あなたの日本語の返答。例：「<ruby>日本語<rt>にほんご</rt></ruby>」
-2. "romaji": あなたの返答の正確なローマ字表記。`;
+
+あなたの返答は、必ず以下の形式のJSONオブジェクトでなければなりません：
+{
+  "japanese": "ここに日本語の返答が入ります（ひらがなとカタカナのみ）",
+  "romaji": "ここにローマ字表記が入ります（日本語の文字は含めない）"
+}
+
+例：
+{
+  "japanese": "こんにちは。おげんきですか。",
+  "romaji": "Konnichiwa. Ogenki desu ka."
+}
+
+制約：
+- "japanese"フィールドには、ひらがなとカタカナのみを使用してください。漢字は使わないでください。
+- "romaji"フィールドには、ローマ字、数字、句読点のみを含めてください。日本語の文字は絶対に入れないでください。`;
   }
   return "You are a friendly and patient English language tutor. Your name is Alex. Your goal is to help me practice conversational English. Keep your responses natural, engaging, and not too long. Correct my grammar mistakes gently if you spot any.";
 };
 
 const getSpokenModeSystemPrompt = (language: Language, level: string = 'N5'): string => {
   if (language === Language.JAPANESE) {
-    return `あなたは日本語の先生「アキ」です。私は今、音声会話で日本語を練習しています。
-あなたの役割は、自然な会話で応答することです。語彙と文法はJLPT ${level}レベルに合わせてください。
-文字起こしテキストにはHTMLのルビタグを含めないでください。`;
+    return `あなたは日本語の先生「アキ」です。私と音声で会話をします。
+あなたには「音声」と「テキスト」という2つの出力方法があります。
+
+**厳格なルール:**
+
+1.  **音声出力:**
+    *   **日本語の文章のみ**を話してください。
+    *   語彙と文法はJLPT ${level}レベルに合わせてください。
+    *   自然で、長すぎない会話を心がけてください。
+    *   **絶対に、絶対にローマ字を声に出して読まないでください。**
+
+2.  **テキスト出力:**
+    *   あなたのテキストは、改行で区切られた2つのパートでなければなりません。
+    *   **パート1:** あなたが音声で話した日本語の文章（ひらがなとカタカナのみ、漢字なし）。
+    *   **パート2:** \`Romaji: \`という接頭辞の後に、その日本語の文章の正確なローマ字表記を続けてください。この行には日本語の文字を含めないでください。
+
+**例:**
+*   **あなたの音声出力:** 「げんきですか。」 (これだけを話す)
+*   **あなたのテキスト出力:**
+    げんきですか。
+    Romaji: Genki desu ka.
+
+**結論:** 音声は純粋な日本語、テキストは日本語とローマ字の両方です。このルールは絶対に守ってください。`;
   }
   return "You are Alex, an English tutor. I am practicing speaking with you. Respond naturally. The system will transcribe your audio response. Correct my grammar mistakes gently.";
 };
@@ -36,7 +68,7 @@ const getWelcomeMessage = (language: Language): ChatMessage => {
     }
     return {
         role: 'model',
-        text: "こんにちは！アキです。<ruby>日本語<rt>にほんご</rt></ruby>の<ruby>練習<rt>れんしゅう</rt></ruby>を<ruby>始<rt>はじ</rt></ruby>めましょうか？<ruby>何<rt>なん</rt></ruby>でも<ruby>聞<rt>き</rt></ruby>いてくださいね！",
+        text: "こんにちは！アキです。にほんごのれんしゅうをはじめましょうか？なんでもきいてくださいね！",
         romaji: "Konnichiwa! Aki desu. Nihongo no renshū o hajimemashō ka? Nandemo kiite kudasai ne!"
     };
 }
@@ -113,7 +145,7 @@ const App: React.FC = () => {
             config.responseSchema = {
                 type: Type.OBJECT,
                 properties: {
-                    japanese: { type: Type.STRING, description: 'Japanese response with HTML ruby tags for furigana.' },
+                    japanese: { type: Type.STRING, description: 'Japanese response using only hiragana and katakana (no kanji).' },
                     romaji: { type: Type.STRING, description: 'Romaji transcription of the Japanese response.' },
                 },
                 required: ['japanese', 'romaji'],
@@ -165,7 +197,15 @@ const App: React.FC = () => {
       if (language === Language.JAPANESE) {
           try {
               const parsed = JSON.parse(response.text);
-              modelMessage = { role: 'model', text: parsed.japanese, romaji: parsed.romaji };
+              const romajiText = parsed.romaji || '';
+              // Find the index of the first Japanese character (covers hiragana, katakana, kanji, and full-width forms)
+              const firstJapaneseCharIndex = romajiText.search(/[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf\u3400-\u4dbf]/);
+              // If a Japanese character is found, truncate the string before it. Otherwise, use the whole string.
+              const cleanedRomaji = firstJapaneseCharIndex !== -1 
+                ? romajiText.substring(0, firstJapaneseCharIndex).trim() 
+                : romajiText;
+
+              modelMessage = { role: 'model', text: parsed.japanese, romaji: cleanedRomaji };
           } catch (jsonError) {
               console.error("Failed to parse JSON response:", jsonError, "Raw text:", response.text);
               modelMessage = { role: 'model', text: `Sorry, I had trouble formatting my response. Here is the raw text: ${response.text}` };
@@ -256,11 +296,7 @@ const App: React.FC = () => {
                 <p>{msg.text}</p>
               ) : (
                 <>
-                  {language === Language.JAPANESE ? (
-                    <p dangerouslySetInnerHTML={{ __html: msg.text }}></p>
-                  ) : (
-                    <p>{msg.text}</p>
-                  )}
+                  <p>{msg.text}</p>
                   {msg.romaji && (
                     <p className="pt-2 mt-2 border-t border-gray-600 text-sm text-gray-400 font-mono tracking-wide">
                       {msg.romaji}
