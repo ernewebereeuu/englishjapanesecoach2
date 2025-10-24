@@ -6,11 +6,6 @@ import { decode, decodeAudioData } from './utils/audio';
 import ConversationView from './components/ConversationView';
 import WordBreakdownModal from './components/WordBreakdownModal';
 
-// FIX: Removed the conflicting 'declare global' block for 'window.aistudio'.
-// The TypeScript error "Property 'aistudio' must be of type 'AIStudio'"
-// indicates that this type is already defined in the global scope from another
-// file, and redeclaring it here causes a conflict.
-
 const getLevelDescription = (level: string) => {
     switch (level) {
         case 'N5': return 'Beginner (N5): Use basic vocabulary and grammar, focusing on daily conversations like greetings and self-introductions. Do not use kanji.';
@@ -188,35 +183,10 @@ const App: React.FC = () => {
   const [loadingAudio, setLoadingAudio] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
-  const [apiKeyReady, setApiKeyReady] = useState(false);
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioCacheRef = useRef<Record<string, AudioBuffer>>({});
-
-  const checkApiKey = useCallback(async () => {
-    try {
-        setApiKeyReady(await window.aistudio.hasSelectedApiKey());
-    } catch (e) {
-        console.error("Failed to check for API key", e);
-        setApiKeyReady(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    checkApiKey();
-  }, [checkApiKey]);
-
-  const handleSelectKey = async () => {
-    try {
-        await window.aistudio.openSelectKey();
-        setApiKeyReady(true);
-    } catch (e) {
-        console.error("Failed to open API key selection", e);
-        setError("Could not open API key selection dialog.");
-    }
-  };
-
 
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
@@ -258,10 +228,8 @@ const App: React.FC = () => {
   }, [language, fetchAndCacheAudio]);
 
   useEffect(() => {
-    if (apiKeyReady) {
-        initializeChat();
-    }
-  }, [initializeChat, language, apiKeyReady]);
+    initializeChat();
+  }, [initializeChat, language]);
   
   useEffect(() => {
     if (chatContainerRef.current) {
@@ -325,9 +293,6 @@ const App: React.FC = () => {
 
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : "Failed to get a response.";
-      if (errorMessage.includes('API Key must be set') || errorMessage.includes('Requested entity was not found')) {
-        setApiKeyReady(false);
-      }
       setError(errorMessage);
        setMessages(prev => [...prev, {role: 'model', text: `Sorry, an error occurred: ${errorMessage}`}]);
     } finally {
@@ -374,9 +339,6 @@ const App: React.FC = () => {
       }
     } catch (e) {
         const errorMessage = e instanceof Error ? e.message : "Failed to play audio.";
-        if (errorMessage.includes('API Key must be set') || errorMessage.includes('Requested entity was not found')) {
-            setApiKeyReady(false);
-        }
         setError(errorMessage);
     } finally {
       setLoadingAudio(null);
@@ -484,31 +446,6 @@ const App: React.FC = () => {
       </div>
     </>
   );
-  
-  const renderAppContent = () => {
-    if (!apiKeyReady) {
-        return (
-            <div className="flex flex-col items-center justify-center h-full w-full max-w-4xl mx-auto bg-gray-800 rounded-2xl shadow-2xl p-6 text-center">
-                <h2 className="text-2xl font-bold mb-4">Se requiere una clave de API</h2>
-                <p className="text-gray-400 mb-6 max-w-md">Para usar el Language Coach, por favor selecciona una clave de API. Esta clave se usará para todas las llamadas a la API de Gemini.</p>
-                <button
-                    onClick={handleSelectKey}
-                    className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                    Seleccionar Clave de API
-                </button>
-                 <p className="text-xs text-gray-500 mt-4">
-                    Es posible que se apliquen cargos. Consulta la{' '}
-                    <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-400">
-                        documentación de facturación
-                    </a> para más detalles.
-                </p>
-            </div>
-        )
-    }
-    return mode === Mode.WRITTEN ? renderWrittenMode() : <ConversationView language={language} systemInstruction={getSpokenModeSystemPrompt(language, level)} onApiKeyError={() => setApiKeyReady(false)} />;
-  }
-
 
   return (
     <div className="min-h-screen bg-gray-900 font-sans text-white p-4 sm:p-8 flex flex-col items-center">
@@ -519,7 +456,6 @@ const App: React.FC = () => {
         <p className="text-gray-400 mt-2">Your AI partner for mastering a new language.</p>
       </header>
       
-    { apiKeyReady && (
       <div className="w-full max-w-4xl mx-auto mb-6 p-2 bg-gray-800 rounded-xl flex flex-col sm:flex-row justify-center items-center gap-4 shadow-lg">
         <div className="flex gap-2">
             {[Language.ENGLISH, Language.JAPANESE].map(lang => (
@@ -562,10 +498,9 @@ const App: React.FC = () => {
             ))}
         </div>
       </div>
-    )}
 
       <main className="w-full flex-grow flex items-center justify-center">
-          {renderAppContent()}
+          {mode === Mode.WRITTEN ? renderWrittenMode() : <ConversationView language={language} systemInstruction={getSpokenModeSystemPrompt(language, level)} />}
       </main>
     </div>
   );
