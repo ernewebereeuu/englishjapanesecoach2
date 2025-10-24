@@ -145,34 +145,12 @@ const App: React.FC = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   
   useEffect(() => {
-    const fetchApiKey = async () => {
-      try {
-        const response = await fetch('/api/get-key');
-        if (!response.ok) {
-            const errorText = await response.text();
-            try {
-                // It might be a JSON error, which is what we expect.
-                const errorJson = JSON.parse(errorText);
-                throw new Error(errorJson.error || errorText);
-            } catch (e) {
-                // It's not JSON, so it's a different kind of error.
-                // Display the raw text, it might be a Vercel error message.
-                throw new Error(errorText || `Failed to fetch API key: ${response.statusText}`);
-            }
-        }
-        const data = await response.json();
-        if (data.apiKey) {
-          setApiKey(data.apiKey);
-        } else {
-          throw new Error("API key not found in server response.");
-        }
-      } catch (error) {
-        console.error("Error fetching API key:", error);
-        setError(error instanceof Error ? error.message : "An unknown error occurred while fetching the API key.");
-      }
-    };
-    
-    fetchApiKey();
+    const key = process.env.API_KEY;
+    if (key) {
+      setApiKey(key);
+    } else {
+      setError("API key not found. Please ensure it is configured correctly in the environment.");
+    }
   }, []);
 
   const getAudioContext = useCallback(() => {
