@@ -5,41 +5,77 @@ import { VolumeUpIcon, SendIcon, BotIcon } from './components/icons';
 import { decode, decodeAudioData } from './utils/audio';
 import ConversationView from './components/ConversationView';
 
+const getLevelDescription = (level: string) => {
+    switch (level) {
+        case 'N5': return 'Nivel Principiante (N5): Usa vocabulario y gramática muy básicos. Estructuras de frases simples. Enfócate en conversaciones cotidianas como saludos y presentaciones. No uses kanji.';
+        case 'N4': return 'Nivel Básico (N4): Usa vocabulario y gramática básicos. Habla de actividades diarias, compras, etc. Puedes empezar a usar kanji muy simples y comunes, pero siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
+        case 'N3': return 'Nivel Intermedio (N3): Usa un rango más amplio de vocabulario y gramática para situaciones más complejas. Usa kanji de uso común, siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
+        case 'N2': return 'Nivel Intermedio-Avanzado (N2): Usa gramática y vocabulario más complejos, adecuados para conversaciones sobre noticias o temas de trabajo. Usa kanji de forma más extensa, siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
+        case 'N1': return 'Nivel Avanzado (N1): Demuestra un dominio casi nativo. Usa expresiones idiomáticas, vocabulario especializado y estructuras gramaticales complejas. Usa kanji avanzados, siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
+        default: return '';
+    }
+}
+
 const getSystemPrompt = (language: Language, level: string = 'N5'): string => {
   if (language === Language.JAPANESE) {
+    const levelDescription = getLevelDescription(level);
+    const useKanji = ['N4', 'N3', 'N2', 'N1'].includes(level);
+
     return `あなたは親切で忍耐強い日本語の先生「アキ」です。私の日本語の会話練習を手伝うのがあなたの役割です。
-あなたの語彙と文法を日本語能力試験（JLPT）の${level}レベルに合わせてください。
-もし文法の間違いを見つけたら、優しく訂正してください。
+
+現在のレベル設定: ${levelDescription}
 
 あなたの返答は、必ず以下の形式のJSONオブジェクトでなければなりません：
 {
-  "japanese": "ここに日本語の返答が入ります（ひらがなとカタカナのみ）",
-  "romaji": "ここにローマ字表記が入ります（日本語の文字は含めない）"
-}
-
-例：
-{
-  "japanese": "こんにちは。おげんきですか。",
-  "romaji": "Konnichiwa. Ogenki desu ka."
+  "japanese": "ここに日本語の返答が入ります",
+  "speech": "ここに音声再生用のひらがな・カタカナのテキストが入ります",
+  "romaji": "ここにローマ字表記が入ります"
 }
 
 制約：
-- "japanese"フィールドには、ひらがなとカタカナのみを使用してください。漢字は使わないでください。
-- "romaji"フィールドには、ローマ字、数字、句読点のみを含めてください。日本語の文字は絶対に入れないでください。`;
+- "japanese"フィールド:
+  ${useKanji 
+    ? '- 漢字を使用できますが、必ず全ての漢字に<ruby>タグでふりがなを付けてください。例: <ruby>日本語<rt>にほんご</rt></ruby>' 
+    : '- 漢字は使わず、ひらがなとカタカナのみを使用してください。'}
+- "speech"フィールド:
+  - 音声再生用です。
+  - "japanese"フィールドのテキストから、<ruby>と<rt>タグとその内容を全て取り除き、ひらがなとカタカナのみにしたものを入れてください。
+- "romaji"フィールド:
+  - ローマ字、数字、句読点のみを含めてください。日本語の文字は絶対に入れないでください。
+
+例 (${level}):
+${level === 'N5' ? 
+`{
+  "japanese": "こんにちは。おげんきですか。",
+  "speech": "こんにちは。おげんきですか。",
+  "romaji": "Konnichiwa. Ogenki desu ka."
+}` : 
+`{
+  "japanese": "はい、<ruby>今日<rt>きょう</rt></ruby>は<ruby>学校<rt>がっこう</rt></ruby>に<ruby>行<rt>い</rt></ruby>きました。",
+  "speech": "はい、きょうはがっこうにいきました。",
+  "romaji": "Hai, kyou wa gakkou ni ikimashita."
+}`
+}
+`;
   }
   return "You are a friendly and patient English language tutor. Your name is Alex. Your goal is to help me practice conversational English. Keep your responses natural, engaging, and not too long. Correct my grammar mistakes gently if you spot any.";
 };
 
+
 const getSpokenModeSystemPrompt = (language: Language, level: string = 'N5'): string => {
   if (language === Language.JAPANESE) {
+    const levelDescription = getLevelDescription(level);
     return `あなたは日本語の先生「アキ」です。私と音声で会話をします。
+
+**現在のレベル設定: ${levelDescription}**
+
 あなたには「音声」と「テキスト」という2つの出力方法があります。
 
 **厳格なルール:**
 
 1.  **音声出力:**
     *   **日本語の文章のみ**を話してください。
-    *   語彙と文法はJLPT ${level}レベルに合わせてください。
+    *   あなたの会話は、上記で指定されたJLPTレベルの難易度に厳密に従ってください。
     *   自然で、長すぎない会話を心がけてください。
     *   **絶対に、絶対にローマ字を声に出して読まないでください。**
 
@@ -63,15 +99,45 @@ const getWelcomeMessage = (language: Language): ChatMessage => {
     if (language === Language.ENGLISH) {
         return { 
             role: 'model', 
-            text: "Hello! I'm Alex. Ready to practice some English? Ask me anything to start!" 
+            text: "Hello! I'm Alex. Ready to practice some English? Ask me anything to start!",
+            speech: "Hello! I'm Alex. Ready to practice some English? Ask me anything to start!",
         };
     }
     return {
         role: 'model',
         text: "こんにちは！アキです。にほんごのれんしゅうをはじめましょうか？なんでもきいてくださいね！",
+        speech: "こんにちは！アキです。にほんごのれんしゅうをはじめましょうか？なんでもきいてくださいね！",
         romaji: "Konnichiwa! Aki desu. Nihongo no renshū o hajimemashō ka? Nandemo kiite kudasai ne!"
     };
 }
+
+const JapaneseText: React.FC<{ text: string }> = ({ text }) => {
+  const finalElements = [];
+  let lastIndex = 0;
+  const regex = /<ruby>(.*?)<rt>(.*?)<\/rt><\/ruby>/g;
+  let match;
+  let i = 0;
+  
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      finalElements.push(text.substring(lastIndex, match.index));
+    }
+    const [, base, furigana] = match;
+    finalElements.push(
+      <ruby key={`ruby-${i++}`}>
+        {base}
+        <rt>{furigana}</rt>
+      </ruby>
+    );
+    lastIndex = regex.lastIndex;
+  }
+  
+  if (lastIndex < text.length) {
+    finalElements.push(text.substring(lastIndex));
+  }
+
+  return <p>{finalElements}</p>;
+};
 
 const App: React.FC = () => {
   const [language, setLanguage] = useState<Language>(Language.ENGLISH);
@@ -86,7 +152,7 @@ const App: React.FC = () => {
   const [loadingAudio, setLoadingAudio] = useState<string | null>(null);
 
   const chatRef = useRef<Chat | null>(null);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   
   useEffect(() => {
@@ -105,14 +171,13 @@ const App: React.FC = () => {
   }, []);
 
   const fetchAndCacheAudio = useCallback(async (text: string) => {
-    if (audioCache[text] || !apiKey) return;
+    if (!text || audioCache[text] || !apiKey) return;
 
     try {
       const ai = new GoogleGenAI({ apiKey });
-      const strippedText = text.replace(/<rt>.*?<\/rt>/g, '').replace(/<\/?ruby>/g, '');
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: strippedText }] }],
+        contents: [{ parts: [{ text }] }],
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
@@ -126,7 +191,6 @@ const App: React.FC = () => {
       }
     } catch (e) {
       console.error("Failed to pre-fetch audio:", e);
-      // Don't set user-facing error for a background task.
     }
   }, [apiKey, audioCache, getAudioContext]);
 
@@ -145,10 +209,11 @@ const App: React.FC = () => {
             config.responseSchema = {
                 type: Type.OBJECT,
                 properties: {
-                    japanese: { type: Type.STRING, description: 'Japanese response using only hiragana and katakana (no kanji).' },
+                    japanese: { type: Type.STRING, description: 'Japanese response. Use hiragana/katakana. For N4+, use Kanji with <ruby> tags for furigana.' },
+                    speech: { type: Type.STRING, description: 'Clean hiragana/katakana text for text-to-speech.' },
                     romaji: { type: Type.STRING, description: 'Romaji transcription of the Japanese response.' },
                 },
-                required: ['japanese', 'romaji'],
+                required: ['japanese', 'speech', 'romaji'],
             };
         }
 
@@ -158,7 +223,7 @@ const App: React.FC = () => {
         });
         const welcomeMessage = getWelcomeMessage(language);
         setMessages([welcomeMessage]);
-        fetchAndCacheAudio(welcomeMessage.text);
+        fetchAndCacheAudio(welcomeMessage.speech || welcomeMessage.text);
     } catch (e) {
         setError(e instanceof Error ? e.message : "An unknown error occurred during initialization.");
     } finally {
@@ -181,7 +246,7 @@ const App: React.FC = () => {
   const handleSendMessage = async () => {
     if (!userInput.trim() || isLoading || !apiKey) return;
 
-    const userMessage: ChatMessage = { role: 'user', text: userInput };
+    const userMessage: ChatMessage = { role: 'user', text: userInput, speech: userInput };
     setMessages(prev => [...prev, userMessage]);
     setUserInput('');
     setIsLoading(true);
@@ -198,24 +263,22 @@ const App: React.FC = () => {
           try {
               const parsed = JSON.parse(response.text);
               const romajiText = parsed.romaji || '';
-              // Find the index of the first Japanese character (covers hiragana, katakana, kanji, and full-width forms)
               const firstJapaneseCharIndex = romajiText.search(/[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf\u3400-\u4dbf]/);
-              // If a Japanese character is found, truncate the string before it. Otherwise, use the whole string.
               const cleanedRomaji = firstJapaneseCharIndex !== -1 
                 ? romajiText.substring(0, firstJapaneseCharIndex).trim() 
                 : romajiText;
 
-              modelMessage = { role: 'model', text: parsed.japanese, romaji: cleanedRomaji };
+              modelMessage = { role: 'model', text: parsed.japanese, speech: parsed.speech, romaji: cleanedRomaji };
           } catch (jsonError) {
               console.error("Failed to parse JSON response:", jsonError, "Raw text:", response.text);
               modelMessage = { role: 'model', text: `Sorry, I had trouble formatting my response. Here is the raw text: ${response.text}` };
           }
       } else {
-          modelMessage = { role: 'model', text: response.text };
+          modelMessage = { role: 'model', text: response.text, speech: response.text };
       }
 
       setMessages(prev => [...prev, modelMessage]);
-      fetchAndCacheAudio(modelMessage.text);
+      fetchAndCacheAudio(modelMessage.speech || modelMessage.text);
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : "Failed to get a response.";
       setError(errorMessage);
@@ -226,9 +289,8 @@ const App: React.FC = () => {
   };
 
   const playAudio = async (text: string) => {
-    if (loadingAudio === text || !apiKey) return;
-
-    // Play from cache if available
+    if (!text || loadingAudio === text || !apiKey) return;
+    
     if (audioCache[text]) {
       const audioContext = getAudioContext();
       const source = audioContext.createBufferSource();
@@ -238,18 +300,16 @@ const App: React.FC = () => {
       return;
     }
     
-    // Not in cache, so fetch, cache, and play
     setLoadingAudio(text);
     setError(null);
     try {
       const ai = new GoogleGenAI({ apiKey });
-      const strippedText = text.replace(/<rt>.*?<\/rt>/g, '').replace(/<\/?ruby>/g, '');
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: strippedText }] }],
+        contents: [{ parts: [{ text }] }],
         config: {
           responseModalities: [Modality.AUDIO],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: language === Language.JAPANESE ? 'Kore' : 'Zephyr' } } },
         },
       });
 
@@ -279,12 +339,12 @@ const App: React.FC = () => {
           <div key={index} className={`flex items-start gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
             {msg.role === 'model' && (
               <button
-                onClick={() => playAudio(msg.text)}
-                disabled={loadingAudio === msg.text || !apiKey}
+                onClick={() => playAudio(msg.speech || msg.text)}
+                disabled={loadingAudio === (msg.speech || msg.text) || !apiKey}
                 className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center flex-shrink-0 transition-transform duration-200 ease-in-out hover:scale-110 disabled:scale-100 disabled:cursor-pointer disabled:bg-gray-600"
                 aria-label="Play audio for this message"
               >
-                {loadingAudio === msg.text ? (
+                {loadingAudio === (msg.speech || msg.text) ? (
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                 ) : (
                   <BotIcon className="w-5 h-5 text-white" />
@@ -296,7 +356,7 @@ const App: React.FC = () => {
                 <p>{msg.text}</p>
               ) : (
                 <>
-                  <p>{msg.text}</p>
+                  <JapaneseText text={msg.text} />
                   {msg.romaji && (
                     <p className="pt-2 mt-2 border-t border-gray-600 text-sm text-gray-400 font-mono tracking-wide">
                       {msg.romaji}
@@ -307,12 +367,12 @@ const App: React.FC = () => {
                {msg.role === 'user' && (
                  <div className="w-full flex justify-end">
                     <button
-                      onClick={() => playAudio(msg.text)}
-                      disabled={loadingAudio === msg.text || !apiKey}
+                      onClick={() => playAudio(msg.speech || msg.text)}
+                      disabled={loadingAudio === (msg.speech || msg.text) || !apiKey}
                       className={`mt-2 text-blue-200 hover:text-white disabled:text-gray-400`}
                       aria-label="Play audio for this message"
                     >
-                    {loadingAudio === msg.text ? (
+                    {loadingAudio === (msg.speech || msg.text) ? (
                         <div className="w-5 h-5 flex items-center justify-center">
                           <div className="w-4 h-4 border-2 border-blue-200 border-t-transparent rounded-full animate-spin"></div>
                         </div>
@@ -406,13 +466,21 @@ const App: React.FC = () => {
         {language === Language.JAPANESE && (
           <>
             <div className="w-px h-6 bg-gray-600 hidden sm:block"></div>
-            <div className="flex gap-1 sm:gap-2">
-                {['N5', 'N4', 'N3', 'N2', 'N1'].map(lvl => (
-                  <button key={lvl} onClick={() => setLevel(lvl)} 
-                    className={`px-3 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-colors ${level === lvl ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>
-                    {lvl}
-                  </button>
-                ))}
+            <div className="flex items-center gap-1 sm:gap-2">
+              {[
+                { value: 'N5', description: 'Principiante' },
+                { value: 'N4', description: 'Básico' },
+                { value: 'N3', description: 'Intermedio' },
+                { value: 'N2', description: 'Avanzado' },
+                { value: 'N1', description: 'Experto' },
+              ].map(lvl => (
+                <button key={lvl.value} onClick={() => setLevel(lvl.value)}
+                  title={`${lvl.value} - ${lvl.description}`}
+                  className={`px-2 py-1 w-20 h-12 text-center text-xs sm:text-sm font-semibold rounded-lg transition-colors flex flex-col justify-center items-center leading-tight ${level === lvl.value ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>
+                  <span className="font-bold text-sm sm:text-base">{lvl.value}</span>
+                  <span className="text-[10px] sm:text-xs opacity-80">{lvl.description}</span>
+                </button>
+              ))}
             </div>
           </>
         )}
