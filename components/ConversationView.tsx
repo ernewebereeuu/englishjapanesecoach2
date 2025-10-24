@@ -1,8 +1,7 @@
-
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, Blob } from '@google/genai';
 import { Language } from '../types';
-import { MicrophoneIcon, StopIcon } from './icons';
+import { MicrophoneIcon } from './icons';
 import { encode, decode, decodeAudioData } from '../utils/audio';
 
 interface ConversationViewProps {
@@ -23,7 +22,7 @@ const systemPrompts = {
 
 const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey }) => {
   const [isListening, setIsListening] = useState(false);
-  const [status, setStatus] = useState('Idle. Press the button to start.');
+  const [status, setStatus] = useState('Mantén presionado el botón para hablar.');
   const [transcriptionHistory, setTranscriptionHistory] = useState<TranscriptionEntry[]>([]);
   const [currentInput, setCurrentInput] = useState('');
   const [currentOutput, setCurrentOutput] = useState('');
@@ -43,7 +42,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey })
 
   const stopConversation = useCallback(() => {
     setIsListening(false);
-    setStatus('Idle. Press the button to start.');
+    setStatus('Mantén presionado el botón para hablar.');
     
     if (sessionPromiseRef.current) {
         sessionPromiseRef.current.then(session => session.close());
@@ -84,8 +83,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey })
       return;
     }
 
-    // Reset state for new session
-    setTranscriptionHistory([]);
+    // For push-to-talk, clear current turn data, but not the whole history
     setCurrentInput('');
     setCurrentOutput('');
     currentInputRef.current = '';
@@ -226,16 +224,19 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey })
       <div className="flex-shrink-0 pt-6 text-center">
         <p className="text-gray-400 mb-4 h-6">{status}</p>
         <button
-          onClick={isListening ? stopConversation : startConversation}
-          disabled={!apiKey && !isListening}
+          onMouseDown={startConversation}
+          onMouseUp={stopConversation}
+          onTouchStart={startConversation}
+          onTouchEnd={stopConversation}
+          disabled={!apiKey}
           className={`relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300
-            ${isListening ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}
+            ${isListening ? 'bg-red-600 scale-110' : 'bg-green-600 hover:bg-green-700'}
             text-white shadow-lg focus:outline-none focus:ring-4 focus:ring-opacity-50
             ${isListening ? 'focus:ring-red-500' : 'focus:ring-green-500'}
             disabled:bg-gray-600 disabled:cursor-not-allowed`}
         >
           {isListening && <span className="absolute inset-0 rounded-full bg-red-500/50 animate-ping"></span>}
-          {isListening ? <StopIcon className="w-10 h-10" /> : <MicrophoneIcon className="w-10 h-10" />}
+          <MicrophoneIcon className="w-10 h-10" />
         </button>
       </div>
     </div>
