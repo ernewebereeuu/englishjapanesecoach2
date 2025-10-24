@@ -18,19 +18,54 @@ const App: React.FC = () => {
   const [userInput, setUserInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState<string | null>(null);
 
   const chatRef = useRef<Chat | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  
+  useEffect(() => {
+    const fetchApiKey = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const response = await fetch('/api/get-key');
+
+        if (response.status === 404) {
+          throw new Error('API endpoint not found (404). Make sure api/get-key.ts is in the /api folder and you have redeployed.');
+        }
+
+        if (!response.ok) {
+          let errorMsg = `Server responded with status: ${response.status}.`;
+          try {
+            const errorData = await response.json();
+            errorMsg = errorData.error || errorMsg;
+          } catch (jsonError) {
+            // Response wasn't JSON, do nothing extra.
+          }
+          throw new Error(errorMsg);
+        }
+
+        const data = await response.json();
+        if (!data.apiKey) {
+          throw new Error('API key is missing in the server response. Please check the api/get-key.ts function.');
+        }
+        setApiKey(data.apiKey);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'An unknown error occurred while fetching the API key.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchApiKey();
+  }, []);
 
   const initializeChat = useCallback(() => {
+    if (!apiKey) return;
     setError(null);
     setIsLoading(true);
     try {
-        if (!process.env.API_KEY) {
-            throw new Error("API key not found. Please set the API_KEY environment variable.");
-        }
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const ai = new GoogleGenAI({ apiKey });
         const systemInstruction = systemPrompts[language];
         chatRef.current = ai.chats.create({
             model: 'gemini-2.5-flash',
@@ -46,11 +81,14 @@ const App: React.FC = () => {
     } finally {
         setIsLoading(false);
     }
-  }, [language]);
+  }, [language, apiKey]);
 
   useEffect(() => {
-    initializeChat();
-  }, [initializeChat]);
+    // Re-initialize chat when language changes or when API key is first loaded
+    if (apiKey) {
+      initializeChat();
+    }
+  }, [initializeChat, apiKey]);
   
   useEffect(() => {
     if (chatContainerRef.current) {
@@ -59,7 +97,7 @@ const App: React.FC = () => {
   }, [messages]);
 
   const handleSendMessage = async () => {
-    if (!userInput.trim() || isLoading) return;
+    if (!userInput.trim() || isLoading || !apiKey) return;
 
     const userMessage: ChatMessage = { role: 'user', text: userInput };
     setMessages(prev => [...prev, userMessage]);
@@ -84,14 +122,11 @@ const App: React.FC = () => {
   };
 
   const playAudio = async (text: string) => {
-    if (isLoading) return;
+    if (isLoading || !apiKey) return;
     setIsLoading(true);
     setError(null);
     try {
-        if (!process.env.API_KEY) {
-            throw new Error("API key not found.");
-        }
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
         contents: [{ parts: [{ text }] }],
@@ -104,7 +139,6 @@ const App: React.FC = () => {
       const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
       if (base64Audio) {
         if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-          // FIX: Add type assertion to handle browser-prefixed AudioContext for TypeScript.
           audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
         }
         const audioContext = audioContextRef.current;
@@ -165,11 +199,11 @@ const App: React.FC = () => {
             onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
             placeholder={language === Language.ENGLISH ? "Type your message..." : "メッセージを入力..."}
             className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-gray-400"
-            disabled={isLoading}
+            disabled={isLoading || !apiKey}
           />
           <button
             onClick={handleSendMessage}
-            disabled={isLoading || !userInput.trim()}
+            disabled={isLoading || !userInput.trim() || !apiKey}
             className="p-2 rounded-lg bg-blue-600 text-white disabled:bg-gray-500 transition-colors"
           >
             <SendIcon className="w-5 h-5"/>
@@ -178,6 +212,29 @@ const App: React.FC = () => {
       </div>
     </div>
   );
+  
+  const renderAppContent = () => {
+    if (!apiKey && isLoading) {
+      return (
+        <div className="text-center text-gray-400">
+          <p>Loading configuration...</p>
+        </div>
+      );
+    }
+
+    if (error && !apiKey) {
+      return (
+         <div className="w-full max-w-4xl mx-auto p-6 bg-red-900/20 border border-red-500 rounded-xl text-center">
+           <h3 className="text-xl font-semibold text-red-300">Configuration Error</h3>
+           <p className="text-red-400 mt-2">{error}</p>
+           <p className="text-gray-400 mt-4 text-sm">Please double-check your Vercel project settings and redeploy.</p>
+         </div>
+      );
+    }
+    
+    return mode === Mode.WRITTEN ? renderWrittenMode() : <ConversationView language={language} apiKey={apiKey} />;
+  }
+
 
   return (
     <div className="min-h-screen bg-gray-900 font-sans text-white p-4 sm:p-8 flex flex-col items-center">
@@ -209,7 +266,7 @@ const App: React.FC = () => {
       </div>
 
       <main className="w-full flex-grow flex items-center justify-center">
-          {mode === Mode.WRITTEN ? renderWrittenMode() : <ConversationView language={language} />}
+          {renderAppContent()}
       </main>
     </div>
   );

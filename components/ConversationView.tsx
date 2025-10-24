@@ -7,6 +7,7 @@ import { encode, decode, decodeAudioData } from '../utils/audio';
 
 interface ConversationViewProps {
   language: Language;
+  apiKey: string | null;
 }
 
 interface TranscriptionEntry {
@@ -20,9 +21,9 @@ const systemPrompts = {
   [Language.JAPANESE]: "あなたは親切で忍耐強い日本語の先生です。名前は「アキ」です。私の日本語の会話練習を手伝うのがあなたの役割です。自然で魅力的な、長すぎない返事を心がけてください。もし文法の間違いを見つけたら、優しく訂正してください。",
 };
 
-const ConversationView: React.FC<ConversationViewProps> = ({ language }) => {
+const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey }) => {
   const [isListening, setIsListening] = useState(false);
-  const [status, setStatus] = useState('Idle');
+  const [status, setStatus] = useState('Idle. Press the button to start.');
   const [transcriptionHistory, setTranscriptionHistory] = useState<TranscriptionEntry[]>([]);
   const [currentInput, setCurrentInput] = useState('');
   const [currentOutput, setCurrentOutput] = useState('');
@@ -42,7 +43,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language }) => {
 
   const stopConversation = useCallback(() => {
     setIsListening(false);
-    setStatus('Idle');
+    setStatus('Idle. Press the button to start.');
     
     if (sessionPromiseRef.current) {
         sessionPromiseRef.current.then(session => session.close());
@@ -78,7 +79,10 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language }) => {
   }, []);
 
   const startConversation = useCallback(async () => {
-    if (isListening) return;
+    if (isListening || !apiKey) {
+      if (!apiKey) setStatus('Error: API Key not available.');
+      return;
+    }
 
     // Reset state for new session
     setTranscriptionHistory([]);
@@ -91,10 +95,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language }) => {
     setIsListening(true);
     
     try {
-      if (!process.env.API_KEY) {
-        throw new Error("API key not found.");
-      }
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
@@ -110,9 +111,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language }) => {
             setStatus('Listening...');
             streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
             
-            // FIX: Add type assertion to handle browser-prefixed AudioContext for TypeScript.
             inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-            // FIX: Add type assertion to handle browser-prefixed AudioContext for TypeScript.
             outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
 
             mediaStreamSourceRef.current = inputAudioContextRef.current.createMediaStreamSource(streamRef.current);
@@ -188,14 +187,13 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language }) => {
       setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       setIsListening(false);
     }
-  }, [isListening, language, stopConversation]);
+  }, [isListening, language, stopConversation, apiKey]);
 
   useEffect(() => {
     return () => {
       stopConversation();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [stopConversation]);
 
   return (
     <div className="flex flex-col h-full w-full max-w-4xl mx-auto bg-gray-800 rounded-2xl shadow-2xl p-6">
@@ -229,10 +227,12 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language }) => {
         <p className="text-gray-400 mb-4 h-6">{status}</p>
         <button
           onClick={isListening ? stopConversation : startConversation}
+          disabled={!apiKey && !isListening}
           className={`relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300
             ${isListening ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}
             text-white shadow-lg focus:outline-none focus:ring-4 focus:ring-opacity-50
-            ${isListening ? 'focus:ring-red-500' : 'focus:ring-green-500'}`}
+            ${isListening ? 'focus:ring-red-500' : 'focus:ring-green-500'}
+            disabled:bg-gray-600 disabled:cursor-not-allowed`}
         >
           {isListening && <span className="absolute inset-0 rounded-full bg-red-500/50 animate-ping"></span>}
           {isListening ? <StopIcon className="w-10 h-10" /> : <MicrophoneIcon className="w-10 h-10" />}
