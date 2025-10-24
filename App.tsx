@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { GoogleGenAI, Chat, Modality, Type } from '@google/genai';
+import { GoogleGenAI, Chat, Modality } from '@google/genai';
 import { Language, Mode, ChatMessage } from './types';
 import { VolumeUpIcon, SendIcon, BotIcon } from './components/icons';
 import { decode, decodeAudioData } from './utils/audio';
@@ -25,40 +25,29 @@ const getSystemPrompt = (language: Language, level: string = 'N5'): string => {
 
 現在のレベル設定: ${levelDescription}
 
-あなたの返答は、必ず以下の形式のJSONオブジェクトでなければなりません：
-{
-  "japanese": "ここに日本語の返答が入ります",
-  "speech": "ここに音声再生用のひらがな・カタカナのテキストが入ります",
-  "romaji": "ここにローマ字表記が入ります"
-}
+**あなたの返答に関する厳格なルール:**
+1. 最初に、ユーザーへの日本語の返答を書いてください。
+   ${useKanji 
+     ? '- 漢字を使用できますが、必ず全ての漢字に<ruby>タグでふりがなを付けてください。例: <ruby>日本語<rt>にほんご</rt></ruby>' 
+     : '- 漢字は使わず、ひらがなとカタカナのみを使用してください。'}
+2. 日本語の返答の後に、必ず \`---\` という区切り線を入れてください。
+3. 区切り線の後、新しい行に \`Speech:\` と書き、その後に音声再生用のひらがな・カタカナのみのテキストを続けてください。
+4. さらに新しい行に \`Romaji:\` と書き、その後にローマ字表記を続けてください。
 
-制約：
-- "japanese"フィールド:
-  ${useKanji 
-    ? '- 漢字を使用できますが、必ず全ての漢字に<ruby>タグでふりがなを付けてください。例: <ruby>日本語<rt>にほんご</rt></ruby>' 
-    : '- 漢字は使わず、ひらがなとカタカナのみを使用してください。'}
-- "speech"フィールド:
-  - 音声再生用です。
-  - "japanese"フィールドのテキストから、<ruby>と<rt>タグとその内容を全て取り除き、ひらがなとカタカナのみにしたものを入れてください。
-- "romaji"フィールド:
-  - ローマ字、数字、句読点のみを含めてください。日本語の文字は絶対に入れないでください。
-
-例 (${level}):
+**例 (${level}):**
 ${level === 'N5' ? 
-`{
-  "japanese": "こんにちは。おげんきですか。",
-  "speech": "こんにちは。おげんきですか。",
-  "romaji": "Konnichiwa. Ogenki desu ka."
-}` : 
-`{
-  "japanese": "はい、<ruby>今日<rt>きょう</rt></ruby>は<ruby>学校<rt>がっこう</rt></ruby>に<ruby>行<rt>い</rt></ruby>きました。",
-  "speech": "はい、きょうはがっこうにいきました。",
-  "romaji": "Hai, kyou wa gakkou ni ikimashita."
-}`
+`こんにちは。おげんきですか。
+---
+Speech: こんにちは。おげんきですか。
+Romaji: Konnichiwa. Ogenki desu ka.` : 
+`はい、<ruby>今日<rt>きょう</rt></ruby>は<ruby>学校<rt>がっこう</rt></ruby>に<ruby>行<rt>い</rt></ruby>きました。
+---
+Speech: はい、きょうはがっこうにいきました。
+Romaji: Hai, kyou wa gakkou ni ikimashita.`
 }
 `;
   }
-  return "You are a friendly and patient English language tutor. Your name is Alex. Your goal is to help me practice conversational English. Keep your responses natural, engaging, and not too long. Correct my grammar mistakes gently if you spot any.";
+  return "You are a friendly and patient English language tutor. Your name is Alex. Your goal is to help me practice conversational English. Keep your responses natural, engaging, and not too long. Correct my grammar mistakes gently if you spot any. Respond with text only, do not use markdown.";
 };
 
 
@@ -160,8 +149,16 @@ const App: React.FC = () => {
       try {
         const response = await fetch('/api/get-key');
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response from server.' }));
-          throw new Error(errorData.error || `Failed to fetch API key: ${response.statusText}`);
+            const errorText = await response.text();
+            try {
+                // It might be a JSON error, which is what we expect.
+                const errorJson = JSON.parse(errorText);
+                throw new Error(errorJson.error || errorText);
+            } catch (e) {
+                // It's not JSON, so it's a different kind of error.
+                // Display the raw text, it might be a Vercel error message.
+                throw new Error(errorText || `Failed to fetch API key: ${response.statusText}`);
+            }
         }
         const data = await response.json();
         if (data.apiKey) {
@@ -195,7 +192,7 @@ const App: React.FC = () => {
         contents: [{ parts: [{ text }] }],
         config: {
           responseModalities: [Modality.AUDIO],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+          speechConfig: { voiceConfig: { voiceName: language === Language.JAPANESE ? 'Kore' : 'Zephyr' } },
         },
       });
       const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
@@ -207,7 +204,7 @@ const App: React.FC = () => {
     } catch (e) {
       console.error("Failed to pre-fetch audio:", e);
     }
-  }, [apiKey, audioCache, getAudioContext]);
+  }, [apiKey, audioCache, getAudioContext, language]);
 
 
   const initializeChat = useCallback(() => {
@@ -218,24 +215,11 @@ const App: React.FC = () => {
         const ai = new GoogleGenAI({ apiKey });
         const systemInstruction = getSystemPrompt(language, level);
         
-        const config: any = { systemInstruction };
-        if (language === Language.JAPANESE) {
-            config.responseMimeType = "application/json";
-            config.responseSchema = {
-                type: Type.OBJECT,
-                properties: {
-                    japanese: { type: Type.STRING, description: 'Japanese response. Use hiragana/katakana. For N4+, use Kanji with <ruby> tags for furigana.' },
-                    speech: { type: Type.STRING, description: 'Clean hiragana/katakana text for text-to-speech.' },
-                    romaji: { type: Type.STRING, description: 'Romaji transcription of the Japanese response.' },
-                },
-                required: ['japanese', 'speech', 'romaji'],
-            };
-        }
-
         chatRef.current = ai.chats.create({
             model: 'gemini-2.5-flash',
-            config,
+            config: { systemInstruction },
         });
+
         const welcomeMessage = getWelcomeMessage(language);
         setMessages([welcomeMessage]);
         fetchAndCacheAudio(welcomeMessage.speech || welcomeMessage.text);
@@ -262,7 +246,8 @@ const App: React.FC = () => {
     if (!userInput.trim() || isLoading || !apiKey) return;
 
     const userMessage: ChatMessage = { role: 'user', text: userInput, speech: userInput };
-    setMessages(prev => [...prev, userMessage]);
+    setMessages(prev => [...prev, userMessage, { role: 'model', text: '' }]);
+    const currentInput = userInput;
     setUserInput('');
     setIsLoading(true);
     setError(null);
@@ -271,37 +256,75 @@ const App: React.FC = () => {
       if (!chatRef.current) {
         throw new Error("Chat is not initialized.");
       }
-      const response = await chatRef.current.sendMessage({ message: userInput });
       
-      let modelMessage: ChatMessage;
-      if (language === Language.JAPANESE) {
-          try {
-              const parsed = JSON.parse(response.text);
-              const romajiText = parsed.romaji || '';
-              const firstJapaneseCharIndex = romajiText.search(/[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf\u3400-\u4dbf]/);
-              const cleanedRomaji = firstJapaneseCharIndex !== -1 
-                ? romajiText.substring(0, firstJapaneseCharIndex).trim() 
-                : romajiText;
+      const responseStream = await chatRef.current.sendMessageStream({ message: currentInput });
 
-              modelMessage = { role: 'model', text: parsed.japanese, speech: parsed.speech, romaji: cleanedRomaji };
-          } catch (jsonError) {
-              console.error("Failed to parse JSON response:", jsonError, "Raw text:", response.text);
-              modelMessage = { role: 'model', text: `Sorry, I had trouble formatting my response. Here is the raw text: ${response.text}` };
-          }
-      } else {
-          modelMessage = { role: 'model', text: response.text, speech: response.text };
+      let fullResponseText = '';
+      for await (const chunk of responseStream) {
+        const chunkText = chunk.text;
+        if (chunkText) {
+            fullResponseText += chunkText;
+            setMessages(prev => {
+                const newMessages = [...prev];
+                const lastMessage = newMessages[newMessages.length - 1];
+                if (lastMessage.role === 'model') {
+                    if (language === Language.JAPANESE) {
+                        lastMessage.text = fullResponseText.split('---')[0];
+                    } else {
+                        lastMessage.text = fullResponseText;
+                    }
+                }
+                return newMessages;
+            });
+        }
       }
 
-      setMessages(prev => [...prev, modelMessage]);
-      fetchAndCacheAudio(modelMessage.speech || modelMessage.text);
+      setMessages(prev => {
+          const newMessages = [...prev];
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (lastMessage.role === 'model') {
+              let finalMessage: ChatMessage;
+              if (language === Language.JAPANESE) {
+                  const parts = fullResponseText.split('---');
+                  const japaneseText = parts[0]?.trim() || '';
+                  const metaContent = parts[1] || '';
+                  
+                  const speechMatch = metaContent.match(/Speech:\s*(.*)/);
+                  const romajiMatch = metaContent.match(/Romaji:\s*(.*)/);
+
+                  finalMessage = {
+                      role: 'model',
+                      text: japaneseText,
+                      speech: speechMatch ? speechMatch[1].trim() : '',
+                      romaji: romajiMatch ? romajiMatch[1].trim() : '',
+                  };
+              } else {
+                  finalMessage = { role: 'model', text: fullResponseText, speech: fullResponseText };
+              }
+              newMessages[newMessages.length - 1] = finalMessage;
+              fetchAndCacheAudio(finalMessage.speech || finalMessage.text);
+          }
+          return newMessages;
+      });
+
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : "Failed to get a response.";
       setError(errorMessage);
-      setMessages(prev => [...prev, {role: 'model', text: `Sorry, an error occurred: ${errorMessage}`}]);
+      setMessages(prev => {
+          const newMessages = [...prev];
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (lastMessage.role === 'model' && lastMessage.text === '') {
+              newMessages[newMessages.length - 1] = {role: 'model', text: `Sorry, an error occurred: ${errorMessage}`};
+          } else {
+              newMessages.push({role: 'model', text: `Sorry, an error occurred: ${errorMessage}`});
+          }
+          return newMessages;
+      });
     } finally {
       setIsLoading(false);
     }
   };
+
 
   const playAudio = async (text: string) => {
     if (!text || loadingAudio === text || !apiKey) return;
@@ -324,7 +347,7 @@ const App: React.FC = () => {
         contents: [{ parts: [{ text }] }],
         config: {
           responseModalities: [Modality.AUDIO],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: language === Language.JAPANESE ? 'Kore' : 'Zephyr' } } },
+          speechConfig: { voiceConfig: { voiceName: language === Language.JAPANESE ? 'Kore' : 'Zephyr' } },
         },
       });
 
@@ -355,8 +378,8 @@ const App: React.FC = () => {
             {msg.role === 'model' && (
               <button
                 onClick={() => playAudio(msg.speech || msg.text)}
-                disabled={loadingAudio === (msg.speech || msg.text) || !apiKey}
-                className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center flex-shrink-0 transition-transform duration-200 ease-in-out hover:scale-110 disabled:scale-100 disabled:cursor-pointer disabled:bg-gray-600"
+                disabled={loadingAudio === (msg.speech || msg.text) || !apiKey || !msg.speech}
+                className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center flex-shrink-0 transition-transform duration-200 ease-in-out hover:scale-110 disabled:scale-100 disabled:cursor-not-allowed disabled:bg-gray-600"
                 aria-label="Play audio for this message"
               >
                 {loadingAudio === (msg.speech || msg.text) ? (
@@ -400,7 +423,7 @@ const App: React.FC = () => {
             </div>
           </div>
         ))}
-        {isLoading && messages[messages.length - 1]?.role === 'user' && (
+        {isLoading && messages[messages.length - 1]?.role === 'model' && !messages[messages.length - 1]?.text && (
              <div className="flex items-start gap-3">
                  <div className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center flex-shrink-0">
                     <BotIcon className="w-5 h-5 text-white" />

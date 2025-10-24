@@ -2,7 +2,7 @@
 // It securely retrieves the API key from server-side environment variables
 // and sends it to the client-side application.
 
-export default (req, res) => {
+export default function handler(req, res) {
   const apiKey = process.env.API_KEY;
   
   if (!apiKey) {
@@ -10,4 +10,4 @@ export default (req, res) => {
   }
   
   return res.status(200).json({ apiKey });
-};
+}
