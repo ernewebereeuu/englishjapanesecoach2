@@ -10,11 +10,10 @@ type RecordingState = 'idle' | 'connecting' | 'recording' | 'paused';
 
 interface ConversationViewProps {
   language: Language;
-  apiKey: string | null;
   systemInstruction: string;
 }
 
-const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, systemInstruction }) => {
+const ConversationView: React.FC<ConversationViewProps> = ({ language, systemInstruction }) => {
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [transcriptionHistory, setTranscriptionHistory] = useState<ChatMessage[]>([]);
   const [currentInput, setCurrentInput] = useState('');
@@ -100,8 +99,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, s
   }, []);
 
   const startConversation = useCallback(async () => {
-    if (recordingState !== 'idle' || !apiKey) {
-      if (!apiKey) setError('Error: API Key not available.');
+    if (recordingState !== 'idle') {
       return;
     }
     
@@ -115,7 +113,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, s
     setRecordingState('connecting');
     
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
@@ -251,7 +249,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, s
       setError(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
       setRecordingState('idle');
     }
-  }, [recordingState, systemInstruction, stopConversation, apiKey, language, pauseRecording]);
+  }, [recordingState, systemInstruction, stopConversation, language, pauseRecording]);
 
   useEffect(() => {
     return () => {
@@ -351,7 +349,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({ language, apiKey, s
             )}
             <button
             onClick={handlePrimaryButtonClick}
-            disabled={!apiKey || recordingState === 'connecting'}
+            disabled={recordingState === 'connecting'}
             className={`relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300
                 ${recordingState === 'recording' ? 'bg-blue-600' : 'bg-green-600 hover:bg-green-700'}
                 ${recordingState === 'paused' ? 'scale-110' : ''}

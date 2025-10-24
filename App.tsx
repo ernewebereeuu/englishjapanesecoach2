@@ -1,5 +1,3 @@
-
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { GoogleGenAI, Modality, Type, Content, Part } from '@google/genai';
 import { Language, Mode, ChatMessage } from './types';
@@ -182,7 +180,6 @@ const App: React.FC = () => {
   const [userInput, setUserInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [apiKey, setApiKey] = useState<string | null>(null);
   const [loadingAudio, setLoadingAudio] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
@@ -190,15 +187,6 @@ const App: React.FC = () => {
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioCacheRef = useRef<Record<string, AudioBuffer>>({});
-  
-  useEffect(() => {
-    const key = process.env.API_KEY;
-    if (key) {
-      setApiKey(key);
-    } else {
-      setError("API key not found. Please ensure it is configured correctly in the environment.");
-    }
-  }, []);
 
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
@@ -208,10 +196,10 @@ const App: React.FC = () => {
   }, []);
 
   const fetchAndCacheAudio = useCallback(async (text: string) => {
-    if (!text || audioCacheRef.current[text] || !apiKey) return;
+    if (!text || audioCacheRef.current[text]) return;
 
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
         contents: [{ parts: [{ text }] }],
@@ -229,7 +217,7 @@ const App: React.FC = () => {
     } catch (e) {
       console.error("Failed to pre-fetch audio:", e);
     }
-  }, [apiKey, getAudioContext, language]);
+  }, [getAudioContext, language]);
 
 
   const initializeChat = useCallback(() => {
@@ -240,10 +228,8 @@ const App: React.FC = () => {
   }, [language, fetchAndCacheAudio]);
 
   useEffect(() => {
-    if (apiKey) {
-      initializeChat();
-    }
-  }, [initializeChat, apiKey, language]);
+    initializeChat();
+  }, [initializeChat, language]);
   
   useEffect(() => {
     if (chatContainerRef.current) {
@@ -252,7 +238,7 @@ const App: React.FC = () => {
   }, [messages]);
 
   const handleSendMessage = async () => {
-    if (!userInput.trim() || isLoading || !apiKey) return;
+    if (!userInput.trim() || isLoading) return;
 
     const userMessage: ChatMessage = { role: 'user', text: userInput };
     const newMessages = [...messages, userMessage];
@@ -262,7 +248,7 @@ const App: React.FC = () => {
     setError(null);
 
     try {
-        const ai = new GoogleGenAI({ apiKey });
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const systemInstruction = getSystemPrompt(language, level);
         
         const contents: Content[] = newMessages.map(msg => ({
@@ -316,7 +302,7 @@ const App: React.FC = () => {
 
 
   const playAudio = async (text: string) => {
-    if (!text || loadingAudio === text || !apiKey) return;
+    if (!text || loadingAudio === text) return;
     
     if (audioCacheRef.current[text]) {
       const audioContext = getAudioContext();
@@ -330,7 +316,7 @@ const App: React.FC = () => {
     setLoadingAudio(text);
     setError(null);
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
         contents: [{ parts: [{ text }] }],
@@ -375,7 +361,7 @@ const App: React.FC = () => {
               {msg.role === 'model' && (
                 <button
                   onClick={() => playAudio(msg.speech || msg.text)}
-                  disabled={loadingAudio === (msg.speech || msg.text) || !apiKey || !msg.speech}
+                  disabled={loadingAudio === (msg.speech || msg.text) || !msg.speech}
                   className="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center flex-shrink-0 transition-transform duration-200 ease-in-out hover:scale-110 disabled:scale-100 disabled:cursor-not-allowed disabled:bg-gray-600"
                   aria-label="Play audio for this message"
                 >
@@ -405,7 +391,7 @@ const App: React.FC = () => {
                   <div className="w-full flex justify-end">
                       <button
                         onClick={(e) => { e.stopPropagation(); playAudio(msg.speech!); }}
-                        disabled={loadingAudio === (msg.speech || msg.text) || !apiKey}
+                        disabled={loadingAudio === (msg.speech || msg.text)}
                         className={`mt-2 text-blue-200 hover:text-white disabled:text-gray-400`}
                         aria-label="Play audio for this message"
                       >
@@ -445,11 +431,11 @@ const App: React.FC = () => {
               onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
               placeholder={language === Language.ENGLISH ? "Type your message..." : "メッセージを入力..."}
               className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-gray-400"
-              disabled={isLoading || !apiKey}
+              disabled={isLoading}
             />
             <button
               onClick={handleSendMessage}
-              disabled={isLoading || !userInput.trim() || !apiKey}
+              disabled={isLoading || !userInput.trim()}
               className="p-2 rounded-lg bg-blue-600 text-white disabled:bg-gray-500 transition-colors"
             >
               <SendIcon className="w-5 h-5"/>
@@ -461,24 +447,7 @@ const App: React.FC = () => {
   );
   
   const renderAppContent = () => {
-    if (!apiKey && !error) {
-      return (
-        <div className="text-center text-gray-400">
-          <p>Loading configuration...</p>
-        </div>
-      );
-    }
-
-    if (error && !messages.length) {
-      return (
-         <div className="w-full max-w-4xl mx-auto p-6 bg-red-900/20 border border-red-500 rounded-xl text-center">
-           <h3 className="text-xl font-semibold text-red-300">Error</h3>
-           <p className="text-red-400 mt-2">{error}</p>
-         </div>
-      );
-    }
-    
-    return mode === Mode.WRITTEN ? renderWrittenMode() : <ConversationView language={language} apiKey={apiKey} systemInstruction={getSpokenModeSystemPrompt(language, level)} />;
+    return mode === Mode.WRITTEN ? renderWrittenMode() : <ConversationView language={language} systemInstruction={getSpokenModeSystemPrompt(language, level)} />;
   }
 
 
