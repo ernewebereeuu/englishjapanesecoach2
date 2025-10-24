@@ -11,7 +11,7 @@ const getLevelDescription = (level: string) => {
         case 'N4': return 'Nivel Básico (N4): Usa vocabulario y gramática básicos. Habla de actividades diarias, compras, etc. Puedes empezar a usar kanji muy simples y comunes, pero siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
         case 'N3': return 'Nivel Intermedio (N3): Usa un rango más amplio de vocabulario y gramática para situaciones más complejas. Usa kanji de uso común, siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
         case 'N2': return 'Nivel Intermedio-Avanzado (N2): Usa gramática y vocabulario más complejos, adecuados para conversaciones sobre noticias o temas de trabajo. Usa kanji de forma más extensa, siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
-        case 'N1': return 'Nivel Avanzado (N1): Demuestra un dominio casi nativo. Usa expresiones idiomáticas, vocabulario especializado y estructuras gramaticales complejas. Usa kanji avanzados, siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
+        case 'N1': return 'Nivel Avanzado (N1): Demuestra un dominio casi nativo. Usa expresiones idiomáticas, vocabulario especializado y estructuras gramaticales complexas. Usa kanji avanzados, siempre con furigana (formato <ruby>漢字<rt>かんじ</rt></ruby>).';
         default: return '';
     }
 }
@@ -156,11 +156,26 @@ const App: React.FC = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   
   useEffect(() => {
-    if (process.env.API_KEY) {
-      setApiKey(process.env.API_KEY);
-    } else {
-      setError("Configuration Error: API_KEY is not available. Please ensure it is set up correctly in your AI Studio environment.");
-    }
+    const fetchApiKey = async () => {
+      try {
+        const response = await fetch('/api/get-key');
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response from server.' }));
+          throw new Error(errorData.error || `Failed to fetch API key: ${response.statusText}`);
+        }
+        const data = await response.json();
+        if (data.apiKey) {
+          setApiKey(data.apiKey);
+        } else {
+          throw new Error("API key not found in server response.");
+        }
+      } catch (error) {
+        console.error("Error fetching API key:", error);
+        setError(error instanceof Error ? error.message : "An unknown error occurred while fetching the API key.");
+      }
+    };
+    
+    fetchApiKey();
   }, []);
 
   const getAudioContext = useCallback(() => {
